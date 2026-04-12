@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.idea/
+*.pkl
+*.db
+bot.log
+out.txt
+tail_out.txt
+.claude/

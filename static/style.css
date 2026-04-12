@@ -1,0 +1,329 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--tg-theme-bg-color, #ffffff);
+    color: var(--tg-theme-text-color, #000000);
+    min-height: 100vh;
+    padding-bottom: 20px;
+}
+
+#app {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 16px;
+}
+
+.loading {
+    text-align: center;
+    padding: 60px 20px;
+    font-size: 18px;
+    color: var(--tg-theme-hint-color, #999);
+}
+
+/* ===== Header ===== */
+.header {
+    text-align: center;
+    padding: 16px 0 20px;
+}
+
+.header h1 {
+    font-size: 22px;
+    font-weight: 700;
+}
+
+.header p {
+    font-size: 14px;
+    color: var(--tg-theme-hint-color, #999);
+    margin-top: 4px;
+}
+
+.breadcrumb {
+    font-size: 13px;
+    color: var(--tg-theme-hint-color, #999);
+    margin-bottom: 12px;
+}
+
+/* ===== Buttons / Cards ===== */
+.btn-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.btn {
+    display: block;
+    width: 100%;
+    padding: 14px 16px;
+    border: none;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+    transition: transform 0.1s, opacity 0.1s;
+    background: var(--tg-theme-secondary-bg-color, #f0f0f0);
+    color: var(--tg-theme-text-color, #000);
+}
+
+.btn:active {
+    transform: scale(0.98);
+    opacity: 0.8;
+}
+
+.btn-primary {
+    background: var(--tg-theme-button-color, #3390ec);
+    color: var(--tg-theme-button-text-color, #fff);
+    text-align: center;
+}
+
+.btn-disabled {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.btn-danger {
+    background: #e74c3c;
+    color: #fff;
+    text-align: center;
+}
+
+.btn-icon {
+    margin-right: 8px;
+}
+
+.btn-hint {
+    font-size: 12px;
+    color: var(--tg-theme-hint-color, #999);
+    margin-top: 2px;
+    font-weight: 400;
+}
+
+/* ===== Question Card ===== */
+.question-card {
+    background: var(--tg-theme-secondary-bg-color, #f7f7f7);
+    border-radius: 16px;
+    padding: 20px;
+    margin-bottom: 16px;
+}
+
+.question-number {
+    font-size: 13px;
+    color: var(--tg-theme-hint-color, #999);
+    margin-bottom: 8px;
+}
+
+.question-text {
+    font-size: 16px;
+    line-height: 1.5;
+    margin-bottom: 16px;
+}
+
+.options-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.option-btn {
+    display: block;
+    width: 100%;
+    padding: 12px 16px;
+    border: 2px solid var(--tg-theme-secondary-bg-color, #e0e0e0);
+    border-radius: 10px;
+    font-size: 15px;
+    text-align: left;
+    cursor: pointer;
+    background: var(--tg-theme-bg-color, #fff);
+    color: var(--tg-theme-text-color, #000);
+    transition: all 0.15s;
+    line-height: 1.4;
+}
+
+.option-btn:active {
+    transform: scale(0.98);
+}
+
+.option-btn.selected {
+    border-color: var(--tg-theme-button-color, #3390ec);
+    background: rgba(51, 144, 236, 0.1);
+}
+
+.option-btn.correct {
+    border-color: #27ae60;
+    background: rgba(39, 174, 96, 0.1);
+}
+
+.option-btn.wrong {
+    border-color: #e74c3c;
+    background: rgba(231, 76, 60, 0.1);
+}
+
+.option-btn.correct-highlight {
+    border-color: #27ae60;
+    background: rgba(39, 174, 96, 0.15);
+}
+
+.option-number {
+    display: inline-block;
+    width: 24px;
+    font-weight: 600;
+}
+
+/* ===== Timer Bar ===== */
+.timer-bar {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: var(--tg-theme-bg-color, #fff);
+    padding: 10px 0;
+    margin: -16px -16px 12px;
+    padding: 10px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--tg-theme-secondary-bg-color, #e0e0e0);
+}
+
+.timer-text {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.timer-text.warning {
+    color: #e67e22;
+}
+
+.timer-text.danger {
+    color: #e74c3c;
+}
+
+.timer-progress {
+    font-size: 14px;
+    color: var(--tg-theme-hint-color, #999);
+}
+
+/* ===== Result Card ===== */
+.result-card {
+    background: var(--tg-theme-secondary-bg-color, #f7f7f7);
+    border-radius: 16px;
+    padding: 24px;
+    text-align: center;
+    margin-bottom: 16px;
+}
+
+.result-score {
+    font-size: 48px;
+    font-weight: 700;
+    margin: 12px 0;
+}
+
+.result-stats {
+    font-size: 15px;
+    line-height: 2;
+    color: var(--tg-theme-hint-color, #666);
+}
+
+.result-stats span {
+    color: var(--tg-theme-text-color, #000);
+    font-weight: 600;
+}
+
+/* ===== Answer Feedback ===== */
+.feedback-box {
+    border-radius: 12px;
+    padding: 16px;
+    margin: 12px 0;
+}
+
+.feedback-correct {
+    background: rgba(39, 174, 96, 0.1);
+    border: 1px solid rgba(39, 174, 96, 0.3);
+}
+
+.feedback-wrong {
+    background: rgba(231, 76, 60, 0.1);
+    border: 1px solid rgba(231, 76, 60, 0.3);
+}
+
+.explanation {
+    margin-top: 12px;
+    padding: 12px;
+    background: var(--tg-theme-secondary-bg-color, #f0f0f0);
+    border-radius: 8px;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+/* ===== Review ===== */
+.review-status {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 12px;
+}
+
+.review-nav {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.review-nav .btn {
+    flex: 1;
+    text-align: center;
+}
+
+/* ===== Purchase ===== */
+.price-tag {
+    font-size: 14px;
+    float: right;
+    color: var(--tg-theme-hint-color, #999);
+    font-weight: 400;
+}
+
+/* ===== Support ===== */
+.support-textarea {
+    width: 100%;
+    min-height: 120px;
+    padding: 12px;
+    border: 2px solid var(--tg-theme-secondary-bg-color, #e0e0e0);
+    border-radius: 12px;
+    font-size: 15px;
+    resize: vertical;
+    background: var(--tg-theme-bg-color, #fff);
+    color: var(--tg-theme-text-color, #000);
+    margin-bottom: 12px;
+    font-family: inherit;
+}
+
+.support-textarea:focus {
+    outline: none;
+    border-color: var(--tg-theme-button-color, #3390ec);
+}
+
+/* ===== Info box ===== */
+.info-box {
+    padding: 12px 16px;
+    border-radius: 10px;
+    margin-bottom: 12px;
+    font-size: 14px;
+}
+
+.info-box.warning {
+    background: rgba(230, 126, 34, 0.1);
+    border: 1px solid rgba(230, 126, 34, 0.3);
+}
+
+.info-box.info {
+    background: rgba(51, 144, 236, 0.1);
+    border: 1px solid rgba(51, 144, 236, 0.3);
+}
+
+.info-box.success {
+    background: rgba(39, 174, 96, 0.1);
+    border: 1px solid rgba(39, 174, 96, 0.3);
+}
