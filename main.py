@@ -15,6 +15,9 @@ WEBAPP_URL = "https://ameba-app.uk"
 
 # --- КОНФИГУРАЦИЯ ---
 CODER_CHAT_ID = 1427715527
+
+# --- АДМИНЫ ---
+ADMIN_IDS = {1427715527, 905937261, 8113642902}
 QR_FILE = os.path.join(os.path.dirname(__file__), "qr.png")  # QR-код из локального файла
 QR_ID = None  # Кэшируется после первой отправки
 
@@ -40,11 +43,18 @@ FACULTIES = {
         "name": "🏥 Лечебное дело",
         "courses": 6,
         "subjects": {
-            2: [{"key": "histology", "name": "🔬 Гистология"}],
+            2: [
+                {"key": "histology", "name": "🔬 Гистология"},
+                {"key": "microbiology", "name": "🦠 Микробиология"},
+                {"key": "biochemistry", "name": "⚗️ Биохимия"},
+            ],
             3: [
                 {"key": "pharmacology", "name": "💊 Фармакология"},
                 {"key": "therapy3", "name": "🩻 Терапия 3"},
                 {"key": "pediatrics3", "name": "👶 Педиатрия"},
+                {"key": "surgery3", "name": "🩺 Хирургия 3"},
+                {"key": "hygiene", "name": "🧼 Гигиена"},
+                {"key": "pathophysiology", "name": "🫀 Патфиз"},
             ],
             4: [
                 {"key": "obstetrics", "name": "🤰 Акушерство и Гинекология"},
@@ -52,6 +62,8 @@ FACULTIES = {
                 {"key": "dermatology", "name": "🧴 Дерматовенерология"},
                 {"key": "lor", "name": "👂 ЛОР"},
                 {"key": "neurology", "name": "🧠 Неврология"},
+                {"key": "mmp", "name": "💉 ВМП"},
+                {"key": "ophthalmology", "name": "👁 Офтальмология"},
             ],
             5: [
                 {"key": "surgery5", "name": "🩺 Хирургия 5"},
@@ -62,6 +74,14 @@ FACULTIES = {
             ],
         }
     }
+}
+
+# --- Все ключи предметов для валидации ---
+ALL_SUBJECT_KEYS = {
+    subj["key"]
+    for fac in FACULTIES.values()
+    for subjects in fac["subjects"].values()
+    for subj in subjects
 }
 
 # Маппинг коротких ключей факультетов к полным названиям
@@ -223,16 +243,17 @@ def subject_menu_inline(fac_key, course_num):
     buttons.append([InlineKeyboardButton(text=f"⬅️ Назад к курсам", callback_data=f"fac_{fac_key}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-def mode_inline(subject, fac_key, course_num):
+def mode_inline(subject, fac_key, course_num, has_acc=False):
     """Меню выбора режима для предмета"""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="📝 Симуляция экзамена", callback_data=f"mode_exam_{subject}")],
-            [InlineKeyboardButton(text="📖 Решать тесты", callback_data=f"mode_tests_{subject}")],
-            [InlineKeyboardButton(text=f"⬅️ Назад к предметам", callback_data=f"course_{fac_key}_{course_num}")],
-            [InlineKeyboardButton(text="📩 Поддержка", callback_data="support")]
-        ]
-    )
+    buttons = [
+        [InlineKeyboardButton(text="📝 Симуляция экзамена", callback_data=f"mode_exam_{subject}")],
+        [InlineKeyboardButton(text="📖 Решать тесты", callback_data=f"mode_tests_{subject}")],
+    ]
+    if not has_acc:
+        buttons.append([InlineKeyboardButton(text="💳 Купить доступ", callback_data=f"buy_access_{subject}")])
+    buttons.append([InlineKeyboardButton(text=f"⬅️ Назад к предметам", callback_data=f"course_{fac_key}_{course_num}")])
+    buttons.append([InlineKeyboardButton(text="📩 Поддержка", callback_data="support")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 # ---------------- Отправка QR-кода ----------------
 async def send_qr_photo(chat_id, caption, reply_markup=None, parse_mode="Markdown"):
@@ -461,8 +482,19 @@ async def back_to_menu(callback: CallbackQuery):
 
 # ---------------- Показ режимов ----------------
 async def show_subject_modes(callback_or_message, subject, fac_key, course_num):
-    markup = mode_inline(subject, fac_key, course_num)
-    text = f"Вы выбрали предмет: *{subject.capitalize()}*.\nВыберите режим, чтобы начать обучение:"
+    user_id = callback_or_message.from_user.id if isinstance(callback_or_message, CallbackQuery) else callback_or_message.from_user.id
+    has_acc = has_access(user_id, subject)
+    markup = mode_inline(subject, fac_key, course_num, has_acc=has_acc)
+
+    # Найдём красивое название предмета
+    subj_name = subject.capitalize()
+    for fac in FACULTIES.values():
+        for subj_list in fac["subjects"].values():
+            for s in subj_list:
+                if s["key"] == subject:
+                    subj_name = s["name"]
+
+    text = f"Вы выбрали предмет: *{subj_name}*.\nВыберите режим, чтобы начать обучение:"
     if isinstance(callback_or_message, CallbackQuery):
         try:
             await callback_or_message.message.edit_text(text, parse_mode="Markdown", reply_markup=markup)
@@ -472,11 +504,14 @@ async def show_subject_modes(callback_or_message, subject, fac_key, course_num):
         await callback_or_message.answer(text, parse_mode="Markdown", reply_markup=markup)
 
 # ---------------- Админ команды ----------------
-ADMIN_ID = 1427715527  # ← твой Telegram ID
+ADMIN_ID = 1427715527  # главный админ (для обратной совместимости)
+
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
 
 @dp.message(Command("setpromo"))
 async def set_promo_cmd(message: Message):
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin(message.from_user.id):
         await message.answer("⛔ У вас нет прав для этой команды.")
         return
     parts = message.text.split(maxsplit=1)
@@ -489,7 +524,7 @@ async def set_promo_cmd(message: Message):
 
 @dp.message(Command("delpromo"))
 async def del_promo_cmd(message: Message):
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin(message.from_user.id):
         await message.answer("⛔ У вас нет прав для этой команды.")
         return
     save_promo("")
@@ -497,7 +532,7 @@ async def del_promo_cmd(message: Message):
 
 @dp.message(Command("grant"))
 async def grant_access(message: Message):
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin(message.from_user.id):
         await message.answer("⛔ У вас нет прав для этой команды.")
         return
     try:
@@ -509,25 +544,37 @@ async def grant_access(message: Message):
             parse_mode="Markdown"
         )
         return
+
+    # Валидация предмета
+    if subject not in ALL_SUBJECT_KEYS:
+        subjects_list = "\n".join(f"• `{k}`" for k in sorted(ALL_SUBJECT_KEYS))
+        await message.answer(
+            f"❌ Предмет `{subject}` не найден\\!\n\n"
+            f"Доступные предметы:\n{subjects_list}",
+            parse_mode="MarkdownV2"
+        )
+        return
+
     purchases = load_purchases()
     if user_id not in purchases:
         purchases[user_id] = {}
-    expires_at = None
-    purchases[user_id][subject] = expires_at
-    print(f"[GRANT] user_id={user_id}, subject={subject}, expires_at={expires_at}")
+    purchases[user_id][subject] = None
     save_purchases(purchases)
+    print(f"[GRANT] user_id={user_id}, subject={subject}")
 
-    # Проверяем, что сохранилось
-    saved_purchases = load_purchases()
-    print(f"[GRANT] После сохранения: purchases={saved_purchases.get(user_id, {})}")
+    # Найдём красивое название предмета
+    subj_name = subject
+    for fac in FACULTIES.values():
+        for subj_list in fac["subjects"].values():
+            for s in subj_list:
+                if s["key"] == subject:
+                    subj_name = s["name"]
 
     await message.answer(
-        f"✅ Доступ к *{subject.capitalize()}* выдан пользователю `{user_id}` "
-        f"на {'неограниченный срок' if expires_at is None else expires_at.strftime('%d.%m.%Y')}.",
-        parse_mode="Markdown"
+        f"✅ Доступ к *{subj_name}* выдан пользователю `{user_id}` навсегда\\.",
+        parse_mode="MarkdownV2"
     )
     try:
-        # Создаем кнопку для продолжения тестов
         continue_markup = InlineKeyboardMarkup(
             inline_keyboard=[
                 [InlineKeyboardButton(text="▶️ Начать тесты", callback_data="show_faculties")]
@@ -535,10 +582,9 @@ async def grant_access(message: Message):
         )
         await bot.send_message(
             user_id,
-            f"🎉 Вам открыт доступ к тестам по *{subject.capitalize()}*!\n"
-            f"Срок: {'Навсегда' if expires_at is None else expires_at.strftime('%d.%m.%Y')}\n\n"
-            f"Теперь вы можете проходить тесты и экзамены без ограничений!",
-            parse_mode="Markdown",
+            f"🎉 Вам открыт доступ к тестам по *{subj_name}*\\!\n\n"
+            f"Теперь вы можете проходить тесты и экзамены без ограничений\\!",
+            parse_mode="MarkdownV2",
             reply_markup=continue_markup
         )
     except:
@@ -546,7 +592,7 @@ async def grant_access(message: Message):
 
 @dp.message(Command("revoke"))
 async def revoke_access(message: Message):
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin(message.from_user.id):
         await message.answer("⛔ У вас нет прав для этой команды.")
         return
     try:
@@ -578,7 +624,7 @@ async def revoke_access(message: Message):
     else:
         await message.answer(f"❌ У пользователя нет доступа к *{subject.capitalize()}*.", parse_mode="Markdown")
 
-@dp.message(F.photo, F.from_user.id == ADMIN_ID)
+@dp.message(F.photo, F.from_user.id.in_(ADMIN_IDS))
 async def get_photo(message: Message):
     file_id = message.photo[-1].file_id
     await message.answer(f"ID фото:\n`{file_id}`", parse_mode="Markdown")
@@ -587,28 +633,99 @@ async def get_photo(message: Message):
 @dp.callback_query(lambda c: c.data.startswith("buy_access_"))
 async def show_purchase_page(callback: CallbackQuery):
     subject = callback.data.split("_", 2)[2]
+    user_id = callback.from_user.id
+    user = callback.from_user
+    sender = f"@{user.username}" if user.username else user.full_name
 
-    # Создаем кнопки с вариантами периодов
+    # Найдём красивое название предмета
+    subj_name = subject.capitalize()
+    for fac in FACULTIES.values():
+        for subj_list in fac["subjects"].values():
+            for s in subj_list:
+                if s["key"] == subject:
+                    subj_name = s["name"]
+
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Навсегда - 300с", callback_data=f"qr_paid_{subject}_forever")],
+            [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"qr_paid_{subject}_forever")],
             [InlineKeyboardButton(text="⬅ Назад", callback_data="back_to_menu")]
         ]
     )
 
-    # Отправляем QR код
+    # Отправляем QR код пользователю
     await send_qr_photo(
         chat_id=callback.message.chat.id,
         caption=(
-            f"💳 *Покупка доступа к {subject.capitalize()}*\n\n"
-            f"Стоимость доступа:\n"
-            f"• 300с навсегда\n\n"
-            f"После оплаты отправьте квитанцию в чат.\n\n"
-            f"В случае возникновения проблем с оплатой, вы можете обратиться к @Ameba\\_admin"
+            f"💳 *Покупка доступа к {subj_name}*\n\n"
+            f"Стоимость доступа: *300с навсегда*\n\n"
+            f"Оплатите по QR-коду и нажмите «Я оплатил»\\.\n"
+            f"После проверки доступ откроем вручную\\.\n\n"
+            f"По вопросам: @Ameba\\_admin"
         ),
         reply_markup=markup
     )
+
+    # Уведомляем всех админов сразу при показе QR
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(
+                admin_id,
+                f"📲 *Запрос на покупку QR*\n\n"
+                f"👤 {sender} \\(id: `{user_id}`\\)\n"
+                f"📚 Предмет: *{subj_name}*\n\n"
+                f"Пользователь открыл QR\\-код для оплаты\\.",
+                parse_mode="MarkdownV2",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text=f"✅ Выдать доступ",
+                        callback_data=f"admin_grant_{user_id}_{subject}"
+                    )]
+                ])
+            )
+        except Exception:
+            pass
+
     await callback.answer()
+
+# Выдача доступа прямо из уведомления админу
+@dp.callback_query(lambda c: c.data and c.data.startswith("admin_grant_"))
+async def admin_grant_from_notification(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Нет прав!", show_alert=True)
+        return
+    parts = callback.data.split("_", 3)
+    # admin_grant_{user_id}_{subject}
+    target_user_id = int(parts[2])
+    subject = parts[3]
+
+    subj_name = subject.capitalize()
+    for fac in FACULTIES.values():
+        for subj_list in fac["subjects"].values():
+            for s in subj_list:
+                if s["key"] == subject:
+                    subj_name = s["name"]
+
+    purchases = load_purchases()
+    if target_user_id not in purchases:
+        purchases[target_user_id] = {}
+    purchases[target_user_id][subject] = None
+    save_purchases(purchases)
+
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer(f"✅ Доступ к *{subj_name}* выдан пользователю `{target_user_id}`\\.", parse_mode="MarkdownV2")
+
+    try:
+        await bot.send_message(
+            target_user_id,
+            f"🎉 Вам открыт доступ к *{subj_name}*\\!\n\nТеперь вы можете проходить тесты и экзамены без ограничений\\!",
+            parse_mode="MarkdownV2",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="▶️ Начать тесты", callback_data="show_faculties")]
+            ])
+        )
+    except Exception:
+        pass
+    await callback.answer("✅ Доступ выдан!")
 
 # ---------------- Оплата ----------------
 @dp.callback_query(lambda c: c.data.startswith("qr_paid_"))

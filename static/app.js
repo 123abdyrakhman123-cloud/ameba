@@ -223,7 +223,7 @@ async function renderModes(facKey, courseNum, subject) {
         </button>`;
     }
 
-    // Purchase
+    // Purchase — всегда показываем если нет доступа
     if (!hasAccess) {
         html += `<button class="btn btn-primary" onclick="navigate('purchase/${subject}')">
             💳 Купить доступ
