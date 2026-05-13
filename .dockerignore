@@ -1,10 +1,10 @@
 __pycache__/
 *.pyc
-*.pkl
-*.db
-*.log
+.idea/
+.git/
+.claude/
 bot.log
 out.txt
 tail_out.txt
-.env
-qr.png
+start_tunnel.bat
+venv/

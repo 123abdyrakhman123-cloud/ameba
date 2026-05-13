@@ -54,10 +54,11 @@ tg.BackButton.onClick(() => {
     else if (path === 'subjects') navigate('courses/' + params[0]);
     else if (path === 'modes') navigate('subjects/' + params[0] + '/' + params[1]);
     else if (path === 'exam-start') navigate('modes/' + params.join('/'));
-    else if (path === 'test') navigate('modes/' + params.join('/'));
-    else if (path === 'purchase') navigate('modes/' + params.join('/'));
+    else if (path === 'test') navigate('');
+    else if (path === 'purchase') navigate('');
     else if (path === 'exam-result' || path === 'review') navigate('');
     else if (path === 'support') navigate('');
+    else if (path === 'referral') navigate('');
     else navigate('');
 });
 
@@ -112,6 +113,9 @@ async function route() {
             case 'support':
                 await renderSupport();
                 break;
+            case 'referral':
+                await renderReferral();
+                break;
             default:
                 navigate('');
         }
@@ -131,6 +135,7 @@ async function renderFaculties() {
     for (const [key, fac] of Object.entries(cfg.faculties)) {
         html += `<button class="btn" onclick="navigate('courses/${key}')">${fac.name}</button>`;
     }
+    html += `<button class="btn" onclick="navigate('referral')">💎 Баллы и рефералка</button>`;
     html += `<button class="btn" onclick="navigate('support')">📩 Поддержка</button>`;
     html += '</div>';
     app.innerHTML = html;
@@ -641,6 +646,118 @@ async function sendSupport() {
         btn.disabled = false;
         btn.textContent = '✉️ Отправить';
     }
+}
+
+// --- Referral & Balance ---
+async function renderReferral() {
+    app.innerHTML = '<div class="loading">Загрузка...</div>';
+    const d = await api('GET', '/api/referral');
+    if (d.error) {
+        app.innerHTML = `<div class="info-box warning">${d.error}</div>`;
+        return;
+    }
+
+    // Прогресс до следующего уровня
+    let nextHtml = '';
+    if (d.next_level) {
+        const pct = Math.round((d.referral_count / (d.referral_count + d.next_level.left)) * 100);
+        nextHtml = `
+            <div class="ref-progress">
+                <div class="ref-progress-label">
+                    До уровня ${d.next_level.name}: ещё ${d.next_level.left} покупок
+                </div>
+                <div class="ref-progress-bar">
+                    <div class="ref-progress-fill" style="width:${pct}%"></div>
+                </div>
+                <div class="ref-progress-hint">бонус вырастет до +${d.next_level.bonus}, лимит до ${d.next_level.limit} сом</div>
+            </div>`;
+    } else {
+        nextHtml = `<div class="info-box success" style="margin:8px 0">🏆 Вы на максимальном уровне!</div>`;
+    }
+
+    // История операций
+    let historyHtml = '';
+    if (d.history.length === 0) {
+        historyHtml = '<div class="ref-history-empty">Пока нет операций</div>';
+    } else {
+        for (const op of d.history) {
+            const sign = op.delta > 0 ? '+' : '';
+            const cls = op.delta > 0 ? 'ref-op-plus' : 'ref-op-minus';
+            const subj = op.subject ? ` (${op.subject})` : '';
+            historyHtml += `
+                <div class="ref-op-row">
+                    <div class="ref-op-info">
+                        <div class="ref-op-reason">${op.reason}${subj}</div>
+                        <div class="ref-op-date">${op.date}</div>
+                    </div>
+                    <div class="ref-op-delta ${cls}">${sign}${op.delta}</div>
+                </div>`;
+        }
+    }
+
+    // Реферальная ссылка
+    const refLinkHtml = d.ref_link
+        ? `<div class="ref-link-box" onclick="copyRefLink('${d.ref_link}')">
+               <div class="ref-link-text">${d.ref_link}</div>
+               <div class="ref-link-copy">📋 Скопировать</div>
+           </div>`
+        : '';
+
+    app.innerHTML = `
+        <div class="header"><h1>💎 Баллы и рефералка</h1></div>
+
+        <div class="ref-balance-card">
+            <div class="ref-balance-row">
+                <span>💰 Всего баллов</span>
+                <span class="ref-balance-val">${d.balance}</span>
+            </div>
+            <div class="ref-balance-row">
+                <span>✅ Доступно</span>
+                <span class="ref-balance-val">${d.available} сом</span>
+            </div>
+            ${d.reserved > 0 ? `<div class="ref-balance-row">
+                <span>⏳ Зарезервировано</span>
+                <span class="ref-balance-val">${d.reserved}</span>
+            </div>` : ''}
+            <div class="ref-balance-row">
+                <span>🔒 Лимит скидки</span>
+                <span class="ref-balance-val">${d.spend_limit} сом</span>
+            </div>
+        </div>
+
+        <div class="ref-level-card">
+            <div class="ref-level-name">${d.level_name}</div>
+            <div class="ref-level-stats">
+                Приглашено: <b>${d.total_invited}</b> &nbsp;|&nbsp;
+                Купили: <b>${d.referral_count}</b> &nbsp;|&nbsp;
+                Бонус: <b>+${d.bonus_per_purchase}</b> за покупку
+            </div>
+            ${nextHtml}
+        </div>
+
+        <div class="ref-section-title">🔗 Ваша реферальная ссылка</div>
+        ${refLinkHtml}
+
+        <div class="ref-section-title">📋 Последние операции</div>
+        <div class="ref-history">${historyHtml}</div>
+
+        <div class="ref-section-title">💡 Как заработать баллы</div>
+        <div class="ref-info-box">
+            <div>• Зарегистрировался → +5</div>
+            <div>• Друг перешёл по ссылке → +10 тебе</div>
+            <div>• Ты прошёл 5 вопросов (реферал) → +15</div>
+            <div>• Купил предмет → +40</div>
+            <div>• Друг купил предмет → +30/40/50 (по уровню)</div>
+        </div>
+    `;
+}
+
+function copyRefLink(link) {
+    navigator.clipboard.writeText(link).then(() => {
+        tg.showPopup({ message: '✅ Ссылка скопирована!' });
+    }).catch(() => {
+        tg.showAlert('Скопируйте ссылку вручную:\n' + link);
+    });
 }
 
 // ==================== Init ====================

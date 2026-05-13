@@ -33,6 +33,24 @@ CREATE INDEX IF NOT EXISTS idx_history_user_subject
 ON question_history (user_id, subject)
 """)
 
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS purchases (
+    user_id INTEGER NOT NULL,
+    subject TEXT NOT NULL,
+    expires_at TEXT,
+    PRIMARY KEY (user_id, subject)
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS trials (
+    user_id INTEGER NOT NULL,
+    subject TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, subject)
+)
+""")
+
 conn.commit()
 conn.close()
 

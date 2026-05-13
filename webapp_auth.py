@@ -5,7 +5,7 @@ import time
 from urllib.parse import parse_qs, unquote
 
 
-def validate_init_data(init_data: str, bot_token: str, max_age: int = 86400) -> dict | None:
+def validate_init_data(init_data: str, bot_token: str, max_age: int = 86400 * 30) -> dict | None:
     """
     Validates Telegram WebApp initData.
     Returns user dict if valid, None otherwise.

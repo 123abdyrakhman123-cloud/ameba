@@ -16,6 +16,8 @@ pkl_lock = asyncio.Lock()
 # Reference to shared state (set in create_app)
 SHARED = {}
 
+DB_PATH = "/data/questions.db"
+
 
 def get_user_id(request):
     """Extract and validate Telegram user from initData."""
@@ -37,7 +39,7 @@ def error_response(msg, status=400):
 # ==================== DB helpers (sync, run in thread) ====================
 
 def db_get_questions(subject, limit=500):
-    conn = sqlite3.connect("questions.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM questions WHERE LOWER(subject)=?", (subject.lower(),))
     questions = cursor.fetchall()
@@ -48,7 +50,7 @@ def db_get_questions(subject, limit=500):
 
 
 def db_get_questions_excluding(subject, exclude_ids, limit=1):
-    conn = sqlite3.connect("questions.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM questions WHERE LOWER(subject)=?", (subject.lower(),))
     all_q = cursor.fetchall()
@@ -62,7 +64,7 @@ def db_get_questions_excluding(subject, exclude_ids, limit=1):
 
 
 def db_get_recent_ids(user_id, subject, limit=100):
-    conn = sqlite3.connect("questions.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
         "SELECT question_id FROM question_history "
@@ -75,7 +77,7 @@ def db_get_recent_ids(user_id, subject, limit=100):
 
 
 def db_save_history(user_id, subject, question_id):
-    conn = sqlite3.connect("questions.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
         "INSERT INTO question_history (user_id, subject, question_id) VALUES (?, ?, ?)",
@@ -86,7 +88,7 @@ def db_save_history(user_id, subject, question_id):
 
 
 def db_save_history_batch(user_id, subject, question_ids):
-    conn = sqlite3.connect("questions.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.executemany(
         "INSERT INTO question_history (user_id, subject, question_id) VALUES (?, ?, ?)",
@@ -97,7 +99,7 @@ def db_save_history_batch(user_id, subject, question_ids):
 
 
 def db_get_correct(question_id):
-    conn = sqlite3.connect("questions.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
         "SELECT correct_option, COALESCE(explanation, '') FROM questions WHERE id=?",
@@ -108,39 +110,113 @@ def db_get_correct(question_id):
     return row
 
 
-# ==================== Pickle helpers ====================
+# ==================== SQLite helpers ====================
 
-import pickle
+import sqlite3 as _sqlite3
+import json as _json
 
-def _load_purchases():
-    try:
-        with open("purchases.pkl", "rb") as f:
-            return pickle.load(f)
-    except Exception:
-        return {}
+def _db_conn():
+    return _sqlite3.connect(DB_PATH)
 
-def _load_trials():
-    try:
-        with open("trial.pkl", "rb") as f:
-            return pickle.load(f)
-    except Exception:
-        return {}
+def _save_session(user_id, session_type, data):
+    """Сохраняет сессию в SQLite."""
+    conn = _db_conn()
+    c = conn.cursor()
+    # Конвертируем datetime в строку для JSON
+    def serialize(obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+    c.execute(
+        "INSERT OR REPLACE INTO sessions (user_id, session_type, data, updated_at) VALUES (?, ?, ?, ?)",
+        (user_id, session_type, _json.dumps(data, default=serialize), datetime.now().isoformat())
+    )
+    conn.commit()
+    conn.close()
 
-def _save_trials(data):
-    with open("trial.pkl", "wb") as f:
-        pickle.dump(data, f)
+def _load_session(user_id, session_type):
+    """Загружает сессию из SQLite. Возвращает dict или None."""
+    conn = _db_conn()
+    c = conn.cursor()
+    c.execute("SELECT data FROM sessions WHERE user_id=? AND session_type=?", (user_id, session_type))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        return None
+    data = _json.loads(row[0])
+    # Восстанавливаем datetime для start_time
+    if session_type == 'exam' and 'start_time' in data:
+        try:
+            data['start_time'] = datetime.fromisoformat(data['start_time'])
+        except Exception:
+            pass
+    return data
+
+def _delete_session(user_id, session_type):
+    """Удаляет сессию из SQLite."""
+    conn = _db_conn()
+    c = conn.cursor()
+    c.execute("DELETE FROM sessions WHERE user_id=? AND session_type=?", (user_id, session_type))
+    conn.commit()
+    conn.close()
 
 def _has_access(user_id, subject):
-    purchases = _load_purchases()
-    up = purchases.get(user_id, {})
-    if subject not in up:
+    conn = _db_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT expires_at FROM purchases WHERE user_id=? AND subject=?",
+        (user_id, subject.lower())
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if row is None:
         return False
-    exp = up[subject]
-    if exp is None:
+    expires_at = row[0]
+    if expires_at is None:
         return True
-    if isinstance(exp, datetime) and datetime.now() > exp:
-        return False
-    return True
+    try:
+        from datetime import datetime as _dt
+        return _dt.now() <= _dt.fromisoformat(expires_at)
+    except Exception:
+        return True
+
+def _load_purchases():
+    conn = _db_conn()
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, subject, expires_at FROM purchases")
+    rows = cursor.fetchall()
+    conn.close()
+    result = {}
+    for uid, subj, exp in rows:
+        if uid not in result:
+            result[uid] = {}
+        result[uid][subj] = None if exp is None else exp
+    return result
+
+def _load_trials():
+    conn = _db_conn()
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, subject, count FROM trials")
+    rows = cursor.fetchall()
+    conn.close()
+    result = {}
+    for uid, subj, count in rows:
+        if uid not in result:
+            result[uid] = {}
+        result[uid][subj] = count
+    return result
+
+def _save_trials(data):
+    conn = _db_conn()
+    cursor = conn.cursor()
+    for user_id, subjects in data.items():
+        for subject, count in subjects.items():
+            cursor.execute(
+                "INSERT OR REPLACE INTO trials (user_id, subject, count) VALUES (?, ?, ?)",
+                (user_id, subject.lower(), count)
+            )
+    conn.commit()
+    conn.close()
 
 
 # ==================== Question serializer ====================
@@ -244,13 +320,11 @@ async def handle_exam_start(request):
         if not await asyncio.to_thread(_has_access, user_id, subject):
             return error_response("No access", 403)
 
-    exam_sessions = SHARED["exam_sessions"]
-
     questions = await asyncio.to_thread(db_get_questions, subject, 50)
     if not questions:
         return error_response("No questions in database")
 
-    # Deduplicate
+    # Deduplicate and shuffle to guarantee no repeats within one exam session
     seen = set()
     unique = []
     for q in questions:
@@ -258,18 +332,20 @@ async def handle_exam_start(request):
             seen.add(q[0])
             unique.append(q)
     questions = unique
+    random.shuffle(questions)
 
     await asyncio.to_thread(db_save_history_batch, user_id, subject, [q[0] for q in questions])
 
-    exam_sessions[user_id] = {
+    session_data = {
         "subject": subject,
-        "questions": questions,
+        "questions": [list(q) for q in questions],
         "current": 0,
         "score": 0,
         "active": True,
         "start_time": datetime.now(),
         "answers": [],
     }
+    await asyncio.to_thread(_save_session, user_id, 'exam', session_data)
 
     return json_response({
         "total_questions": len(questions),
@@ -282,8 +358,7 @@ async def handle_exam_question(request):
     if not user_id:
         return error_response("Unauthorized", 401)
 
-    exam_sessions = SHARED["exam_sessions"]
-    session = exam_sessions.get(user_id)
+    session = await asyncio.to_thread(_load_session, user_id, 'exam')
     if not session or not session["active"]:
         return error_response("No active exam")
 
@@ -311,8 +386,7 @@ async def handle_exam_answer(request):
     if not user_id:
         return error_response("Unauthorized", 401)
 
-    exam_sessions = SHARED["exam_sessions"]
-    session = exam_sessions.get(user_id)
+    session = await asyncio.to_thread(_load_session, user_id, 'exam')
     if not session or not session["active"]:
         return error_response("No active exam")
 
@@ -353,6 +427,7 @@ async def handle_exam_answer(request):
     session["current"] += 1
 
     has_next = session["current"] < len(session["questions"])
+    await asyncio.to_thread(_save_session, user_id, 'exam', session)
 
     return json_response({
         "has_next": has_next,
@@ -365,13 +440,10 @@ async def handle_exam_finish(request):
     if not user_id:
         return error_response("Unauthorized", 401)
 
-    exam_sessions = SHARED["exam_sessions"]
-    review_sessions = SHARED["review_sessions"]
-    session = exam_sessions.get(user_id)
+    session = await asyncio.to_thread(_load_session, user_id, 'exam')
     if not session:
         return error_response("No exam session")
 
-    session["active"] = False
     answers = session.get("answers", [])
     score = session["score"]
     total = len(session["questions"])
@@ -384,13 +456,14 @@ async def handle_exam_finish(request):
 
     # Save for review
     if answers:
-        review_sessions[user_id] = {
+        review_data = {
             "subject": session["subject"],
             "answers": answers,
             "current": 0,
         }
+        await asyncio.to_thread(_save_session, user_id, 'review', review_data)
 
-    del exam_sessions[user_id]
+    await asyncio.to_thread(_delete_session, user_id, 'exam')
 
     return json_response({
         "score": score,
@@ -409,8 +482,7 @@ async def handle_exam_status(request):
     if not user_id:
         return error_response("Unauthorized", 401)
 
-    exam_sessions = SHARED["exam_sessions"]
-    session = exam_sessions.get(user_id)
+    session = await asyncio.to_thread(_load_session, user_id, 'exam')
     if not session or not session["active"]:
         return json_response({"active": False})
 
@@ -450,8 +522,7 @@ async def handle_test_start(request):
     q = questions[0]
     await asyncio.to_thread(db_save_history, user_id, subject, q[0])
 
-    test_sessions = SHARED["test_sessions"]
-    test_sessions[user_id] = {"subject": subject, "question": q, "active": True}
+    await asyncio.to_thread(_save_session, user_id, 'test', {"subject": subject, "question": list(q), "active": True})
 
     return json_response({
         "question": question_to_dict(q),
@@ -466,8 +537,7 @@ async def handle_test_answer(request):
     if not user_id:
         return error_response("Unauthorized", 401)
 
-    test_sessions = SHARED["test_sessions"]
-    session = test_sessions.get(user_id)
+    session = await asyncio.to_thread(_load_session, user_id, 'test')
     if not session or not session["active"]:
         return error_response("No active test")
 
@@ -518,8 +588,7 @@ async def handle_test_next(request):
     if not user_id:
         return error_response("Unauthorized", 401)
 
-    test_sessions = SHARED["test_sessions"]
-    session = test_sessions.get(user_id)
+    session = await asyncio.to_thread(_load_session, user_id, 'test')
     if not session or not session["active"]:
         return error_response("No active test")
 
@@ -540,7 +609,8 @@ async def handle_test_next(request):
 
     q = questions[0]
     await asyncio.to_thread(db_save_history, user_id, subject, q[0])
-    session["question"] = q
+    session["question"] = list(q)
+    await asyncio.to_thread(_save_session, user_id, 'test', session)
 
     return json_response({
         "question": question_to_dict(q),
@@ -555,8 +625,7 @@ async def handle_review(request):
     if not user_id:
         return error_response("Unauthorized", 401)
 
-    review_sessions = SHARED["review_sessions"]
-    session = review_sessions.get(user_id)
+    session = await asyncio.to_thread(_load_session, user_id, 'review')
     if not session or not session["answers"]:
         return error_response("No review data", 404)
 
@@ -600,15 +669,25 @@ async def handle_purchase_select(request):
     username = user.get("username", "")
     sender = f"@{username}" if username else first_name
 
-    try:
-        await bot.send_message(
-            coder_chat_id,
-            f"💳 Новый запрос (Mini App): {sender} (id: `{user_id}`)\n"
-            f"Предмет: *{subject}*\nПериод: *{period}* ({prices[period]})",
-            parse_mode="Markdown",
-        )
-    except Exception:
-        pass
+    from aiogram.types import InlineKeyboardMarkup as _IKM, InlineKeyboardButton as _IKB
+    _admin_ids = {1427715527, 1347147831, 905937261}
+    _subj_name = subject.capitalize()
+    _grant_markup = _IKM(inline_keyboard=[
+        [_IKB(text="✅ Выдать доступ", callback_data=f"admin_grant_{user_id}_{subject}")]
+    ])
+    for _admin_id in _admin_ids:
+        try:
+            await bot.send_message(
+                _admin_id,
+                f"📲 *Запрос на покупку* \\(Mini App\\)\n\n"
+                f"👤 {sender} \\(id: `{user_id}`\\)\n"
+                f"📚 Предмет: *{_subj_name}*\n"
+                f"💰 Период: *{period}* \\({prices[period]}\\)",
+                parse_mode="MarkdownV2",
+                reply_markup=_grant_markup,
+            )
+        except Exception:
+            pass
 
     # Отправляем QR из файла через функцию из main
     qr_url = ""
@@ -661,37 +740,390 @@ async def handle_support_send(request):
     username = user.get("username", "")
     sender = f"@{username}" if username else user.get("first_name", "")
 
+    _admin_ids = {1427715527, 1347147831, 905937261}
+    for _admin_id in _admin_ids:
+        try:
+            await bot.send_message(
+                _admin_id,
+                f"🆘 Сообщение поддержки (Mini App)\n👤 {sender} (id:{user_id}):\n\n{message}",
+            )
+        except Exception:
+            pass
+
+    return json_response({"success": True})
+
+
+# ==================== ADMIN API ====================
+
+ADMIN_IDS = {1427715527, 905937261, 8113642902, 771714551, 1347147831, 751240103, 1238729309, 6586083917, 921010964, 1333298810, 942664226, 1239722079}
+
+def _is_admin(request):
+    auth = request.headers.get("Authorization", "")
+    # Accept session token (password login)
+    if auth == ADMIN_SESSION_TOKEN:
+        return True
+    # Accept Telegram initData
+    user = validate_init_data(auth, config.API_TOKEN)
+    if user and user.get("id") in ADMIN_IDS:
+        return True
+    return False
+
+async def handle_admin_check(request):
+    """Returns whether current user is admin — used by frontend to show/hide panel."""
+    from urllib.parse import parse_qs, unquote
+    import json as _json
+
+    init_data = request.headers.get("Authorization", "")
+    print(f"[ADMIN_CHECK] init_data len={len(init_data)}, preview={init_data[:80]!r}")
+
+    user = None
+
+    # Try strict validation first
+    user = validate_init_data(init_data, config.API_TOKEN)
+    print(f"[ADMIN_CHECK] strict_validate={user}")
+
+    if not user:
+        # Fallback: parse user from initData without signature/time check
+        try:
+            parsed = parse_qs(init_data, keep_blank_values=True)
+            user_str = parsed.get("user", [None])[0]
+            if user_str:
+                user = _json.loads(unquote(user_str))
+                print(f"[ADMIN_CHECK] fallback_user={user}")
+        except Exception as e:
+            print(f"[ADMIN_CHECK] fallback error: {e}")
+
+    if not user:
+        return json_response({"is_admin": False, "debug": "no_user"})
+
+    uid = user.get("id")
+    is_adm = uid in ADMIN_IDS
+    print(f"[ADMIN_CHECK] uid={uid}, is_admin={is_adm}, ADMIN_IDS={ADMIN_IDS}")
+    return json_response({"is_admin": is_adm, "user_id": uid})
+
+ADMIN_PASSWORD = "ameba2024admin"
+ADMIN_SESSION_TOKEN = "ameba_admin_session_9x7k2"  # static secret token
+
+async def handle_admin_login(request):
     try:
-        await bot.send_message(
-            coder_chat_id,
-            f"🆘 Сообщение (Mini App) от {sender} (id:{user_id}):\n\n{message}",
+        data = await request.json()
+        pwd = data.get("password", "")
+    except Exception:
+        return error_response("bad request")
+    if pwd == ADMIN_PASSWORD:
+        return json_response({"success": True, "token": ADMIN_SESSION_TOKEN})
+    return json_response({"success": False})
+
+async def handle_admin_questions(request):
+    if not _is_admin(request):
+        return error_response("Forbidden", 403)
+    def _fetch():
+        conn = _sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, subject, question, option1, option2, option3, option4, option5,
+                   correct_option, COALESCE(explanation, '')
+            FROM questions ORDER BY subject, id
+        """)
+        rows = c.fetchall()
+        conn.close()
+        return rows
+    rows = await asyncio.get_event_loop().run_in_executor(None, _fetch)
+    questions = [
+        {
+            "id": r[0], "subject": r[1], "question": r[2],
+            "option1": r[3], "option2": r[4], "option3": r[5],
+            "option4": r[6], "option5": r[7],
+            "correct_option": r[8], "explanation": r[9]
+        }
+        for r in rows
+    ]
+    return json_response({"questions": questions})
+
+async def handle_admin_question_edit(request):
+    if not _is_admin(request):
+        return error_response("Forbidden", 403)
+    q_id = request.match_info.get("id")
+    try:
+        q_id = int(q_id)
+    except (ValueError, TypeError):
+        return error_response("Invalid id")
+    data = await request.json()
+    question    = (data.get("question") or "").strip()
+    option1     = (data.get("option1") or "").strip() or None
+    option2     = (data.get("option2") or "").strip() or None
+    option3     = (data.get("option3") or "").strip() or None
+    option4     = (data.get("option4") or "").strip() or None
+    option5     = (data.get("option5") or "").strip() or None
+    correct     = data.get("correct_option")
+    explanation = (data.get("explanation") or "").strip() or None
+    if not question or not correct:
+        return error_response("Missing fields")
+    try:
+        correct = int(correct)
+    except (ValueError, TypeError):
+        return error_response("Invalid correct_option")
+    def _update():
+        conn = _sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("""
+            UPDATE questions SET question=?, option1=?, option2=?, option3=?, option4=?, option5=?,
+            correct_option=?, explanation=? WHERE id=?
+        """, (question, option1, option2, option3, option4, option5, correct, explanation, q_id))
+        conn.commit()
+        conn.close()
+    await asyncio.get_event_loop().run_in_executor(None, _update)
+    return json_response({"success": True})
+
+async def handle_admin_question_delete(request):
+    if not _is_admin(request):
+        return error_response("Forbidden", 403)
+    q_id = request.match_info.get("id")
+    try:
+        q_id = int(q_id)
+    except (ValueError, TypeError):
+        return error_response("Invalid id")
+    def _delete():
+        conn = _sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("DELETE FROM questions WHERE id=?", (q_id,))
+        conn.commit()
+        conn.close()
+    await asyncio.get_event_loop().run_in_executor(None, _delete)
+    return json_response({"success": True})
+
+
+# --- Stats ---
+async def handle_admin_stats(request):
+    if not _is_admin(request):
+        return error_response("Forbidden", 403)
+
+    def _get_stats():
+        conn = _sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+
+        # Всего пользователей
+        try:
+            c.execute("SELECT COUNT(DISTINCT user_id) FROM users")
+            total_users = c.fetchone()[0]
+        except Exception:
+            total_users = 0
+        if not total_users:
+            c.execute("SELECT COUNT(DISTINCT user_id) FROM question_history")
+            total_users = c.fetchone()[0]
+
+        # Всего ответов
+        c.execute("SELECT COUNT(*) FROM question_history")
+        total_answers = c.fetchone()[0]
+
+        # Топ-5 предметов
+        c.execute("""
+            SELECT subject, COUNT(*) as cnt
+            FROM question_history
+            GROUP BY subject
+            ORDER BY cnt DESC
+            LIMIT 5
+        """)
+        top_subjects = [{"subject": r[0], "count": r[1]} for r in c.fetchall()]
+
+        # Покупок
+        c.execute("SELECT COUNT(*) FROM purchases")
+        total_purchases = c.fetchone()[0]
+
+        # Вопросов в базе
+        c.execute("SELECT COUNT(*) FROM questions")
+        total_questions = c.fetchone()[0]
+
+        # Вопросов по предметам
+        c.execute("SELECT subject, COUNT(*) FROM questions GROUP BY subject ORDER BY subject")
+        questions_by_subject = [{"subject": r[0], "count": r[1]} for r in c.fetchall()]
+
+        # Всего запусков экзамена
+        try:
+            c.execute("SELECT COUNT(*) FROM exam_log")
+            total_exams = c.fetchone()[0]
+        except Exception:
+            total_exams = 0
+
+        # Реферальная статистика
+        c.execute("SELECT COUNT(*) FROM referrals")
+        total_referrals = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(DISTINCT referrer_id) FROM referrals")
+        total_referrers = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(*) FROM referrals WHERE purchase_bonus_paid=1")
+        referral_purchases = c.fetchone()[0]
+
+        c.execute("""
+            SELECT r.referrer_id, u.username, u.full_name, COUNT(*) as cnt,
+                   SUM(r.purchase_bonus_paid) as purchases
+            FROM referrals r
+            LEFT JOIN users u ON u.user_id = r.referrer_id
+            GROUP BY r.referrer_id
+            ORDER BY cnt DESC
+            LIMIT 10
+        """)
+        top_referrers = [
+            {
+                "label": f"@{r[1]}" if r[1] else (r[2] or str(r[0])),
+                "invited": r[3],
+                "purchases": r[4] or 0
+            }
+            for r in c.fetchall()
+        ]
+
+        conn.close()
+        return {
+            "total_users": total_users,
+            "total_answers": total_answers,
+            "total_purchases": total_purchases,
+            "total_questions": total_questions,
+            "total_exams": total_exams,
+            "top_subjects": top_subjects,
+            "questions_by_subject": questions_by_subject,
+            "total_referrals": total_referrals,
+            "total_referrers": total_referrers,
+            "referral_purchases": referral_purchases,
+            "top_referrers": top_referrers,
+        }
+
+    stats = await asyncio.get_event_loop().run_in_executor(None, _get_stats)
+    return json_response(stats)
+
+
+# --- Referral & Balance ---
+async def handle_referral(request):
+    user_id, _ = get_user_id(request)
+    if not user_id:
+        return error_response("Unauthorized", 401)
+
+    def _get_data():
+        conn = _db_conn()
+        c = conn.cursor()
+
+        # Баланс и инфо о пользователе
+        c.execute("SELECT points_balance, referral_count FROM users WHERE user_id=?", (user_id,))
+        row = c.fetchone()
+        balance = row[0] if row else 0
+        referral_count = row[1] if row else 0
+
+        # Зарезервированные баллы
+        c.execute(
+            "SELECT COALESCE(SUM(points),0) FROM points_reserved WHERE user_id=? AND status='pending'",
+            (user_id,)
         )
+        reserved = c.fetchone()[0]
+
+        # Всего приглашённых
+        c.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?", (user_id,))
+        total_invited = c.fetchone()[0]
+
+        # Последние 10 операций
+        c.execute(
+            "SELECT delta, reason, subject, created_at FROM points_log "
+            "WHERE user_id=? ORDER BY created_at DESC LIMIT 10",
+            (user_id,)
+        )
+        history_rows = c.fetchall()
+        conn.close()
+        return balance, reserved, referral_count, total_invited, history_rows
+
+    balance, reserved, referral_count, total_invited, history_rows = await asyncio.to_thread(_get_data)
+    available = balance - reserved
+
+    # Уровень по referral_count
+    level_name, bonus, spend_limit = "🟢 Новичок", 30, 100
+    thresholds = [(0, "🟢 Новичок", 30, 100), (10, "🔵 Продвинутый", 40, 200), (20, "🟣 Мессия", 50, 300)]
+    for thr, name, b, lim in thresholds:
+        if referral_count >= thr:
+            level_name, bonus, spend_limit = name, b, lim
+
+    # До следующего уровня
+    next_level = None
+    for thr, name, b, lim in thresholds:
+        if referral_count < thr:
+            next_level = {"left": thr - referral_count, "name": name, "bonus": b, "limit": lim}
+            break
+
+    reason_names = {
+        "registration":      "Регистрация",
+        "referral_join":     "Переход по вашей ссылке",
+        "own_trial":         "Прорешал бесплатные вопросы",
+        "referral_purchase": "Реферал купил предмет",
+        "own_purchase":      "Покупка предмета",
+        "spend":             "Оплата баллами",
+    }
+    history = []
+    for delta, reason, subject, created_at in history_rows:
+        history.append({
+            "delta": delta,
+            "reason": reason_names.get(reason, reason),
+            "subject": subject or "",
+            "date": (created_at or "")[:10],
+        })
+
+    # Реферальная ссылка — берём username бота из SHARED
+    bot = SHARED.get("bot")
+    bot_username = ""
+    try:
+        info = await bot.get_me()
+        bot_username = info.username
     except Exception:
         pass
 
-    return json_response({"success": True})
+    return json_response({
+        "balance": balance,
+        "reserved": reserved,
+        "available": available,
+        "spend_limit": spend_limit,
+        "level_name": level_name,
+        "bonus_per_purchase": bonus,
+        "referral_count": referral_count,
+        "total_invited": total_invited,
+        "next_level": next_level,
+        "history": history,
+        "ref_link": f"https://t.me/{bot_username}?start=ref_{user_id}" if bot_username else "",
+    })
 
 
 # --- Static files ---
 async def handle_index(request):
     static_dir = os.path.join(os.path.dirname(__file__), "static")
-    return web.FileResponse(os.path.join(static_dir, "index.html"))
+    return web.FileResponse(os.path.join(static_dir, "index.html"), headers={"ngrok-skip-browser-warning": "1"})
+
+async def handle_admin_page(request):
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    return web.FileResponse(os.path.join(static_dir, "admin.html"), headers={"ngrok-skip-browser-warning": "1"})
+
+async def handle_static(request):
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    filename = request.match_info.get("filename", "")
+    filepath = os.path.join(static_dir, filename)
+    if not os.path.exists(filepath):
+        raise web.HTTPNotFound()
+    return web.FileResponse(filepath, headers={"ngrok-skip-browser-warning": "1"})
 
 
 # ==================== APP FACTORY ====================
 
-def create_app(bot, exam_sessions, test_sessions, review_sessions):
-    SHARED["bot"] = bot
-    SHARED["exam_sessions"] = exam_sessions
-    SHARED["test_sessions"] = test_sessions
-    SHARED["review_sessions"] = review_sessions
+@web.middleware
+async def ngrok_middleware(request, handler):
+    response = await handler(request)
+    response.headers["ngrok-skip-browser-warning"] = "1"
+    return response
 
-    app = web.Application()
+
+def create_app(bot):
+    SHARED["bot"] = bot
+
+    app = web.Application(middlewares=[ngrok_middleware])
 
     static_dir = os.path.join(os.path.dirname(__file__), "static")
 
     app.router.add_get("/", handle_index)
-    app.router.add_static("/static/", static_dir, name="static")
+    app.router.add_get("/admin", handle_admin_page)
+    app.router.add_get("/static/{filename:.+}", handle_static)
 
     # API routes
     app.router.add_get("/api/config", handle_config)
@@ -711,5 +1143,13 @@ def create_app(bot, exam_sessions, test_sessions, review_sessions):
 
     app.router.add_post("/api/purchase/select", handle_purchase_select)
     app.router.add_post("/api/support/send", handle_support_send)
+    app.router.add_get("/api/referral", handle_referral)
+
+    app.router.add_get("/api/admin/check", handle_admin_check)
+    app.router.add_post("/api/admin/login", handle_admin_login)
+    app.router.add_get("/api/admin/questions", handle_admin_questions)
+    app.router.add_post("/api/admin/question/{id}", handle_admin_question_edit)
+    app.router.add_post("/api/admin/question/{id}/delete", handle_admin_question_delete)
+    app.router.add_get("/api/admin/stats", handle_admin_stats)
 
     return app

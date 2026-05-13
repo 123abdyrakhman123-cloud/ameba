@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Амеба — Админ панель</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/static/admin.css?v=3">
+</head>
+<body>
+  <div id="app">
+
+    <!-- Экран: пароль (для браузера) -->
+    <div id="screen-password" class="screen hidden">
+      <div class="denied-box">
+        <div class="denied-icon">🔐</div>
+        <h2>Вход в панель</h2>
+        <input type="password" id="input-password" placeholder="Пароль" style="margin-top:16px;width:100%;max-width:280px;padding:12px;border-radius:10px;border:1px solid rgba(0,0,0,0.2);font-size:15px;text-align:center;">
+        <button id="btn-password-login" style="margin-top:10px;width:100%;max-width:280px;padding:12px;background:#2AABEE;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">Войти</button>
+        <p id="password-error" style="color:#f44336;margin-top:8px;font-size:13px;"></p>
+      </div>
+    </div>
+
+    <!-- Экран: нет доступа -->
+    <div id="screen-denied" class="screen hidden">
+      <div class="denied-box">
+        <div class="denied-icon">⛔</div>
+        <h2>Нет доступа</h2>
+        <p>Эта панель доступна только администраторам.</p>
+      </div>
+    </div>
+
+    <!-- Экран: список вопросов -->
+    <div id="screen-list" class="screen hidden">
+      <div class="top-bar">
+        <h1 class="top-title">⚙️ Админ панель</h1>
+      </div>
+
+      <!-- Вкладки -->
+      <div class="tabs">
+        <button class="tab-btn active" id="tab-questions" onclick="switchTab('questions')">📋 Вопросы</button>
+        <button class="tab-btn" id="tab-stats" onclick="switchTab('stats')">📊 Статистика</button>
+      </div>
+
+      <!-- Вкладка вопросов -->
+      <div id="tab-content-questions">
+        <div class="filters">
+          <select id="filter-subject">
+            <option value="">— Все предметы —</option>
+          </select>
+          <input id="filter-search" type="text" placeholder="🔍 Поиск по тексту..." autocomplete="off">
+        </div>
+        <div id="stats-bar" class="stats-bar"></div>
+        <div id="questions-list" class="questions-list">
+          <div class="loading">Загрузка...</div>
+        </div>
+      </div>
+
+      <!-- Вкладка статистики -->
+      <div id="tab-content-stats" class="hidden">
+        <div id="stats-content" class="stats-content">
+          <div class="loading">Загрузка статистики...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Экран: редактирование вопроса -->
+    <div id="screen-edit" class="screen hidden">
+      <div class="top-bar">
+        <button class="btn-back" id="btn-back">← Назад</button>
+        <h1 class="top-title">✏️ Редактирование</h1>
+      </div>
+
+      <div class="edit-form">
+        <input type="hidden" id="edit-id">
+
+        <label class="field-label">Предмет</label>
+        <input type="text" id="edit-subject" readonly class="input-readonly">
+
+        <label class="field-label">Текст вопроса</label>
+        <textarea id="edit-question" rows="4"></textarea>
+
+        <label class="field-label">Варианты ответов</label>
+        <div class="options-list">
+          <div class="option-row">
+            <input type="radio" name="correct" value="1" id="opt-r1">
+            <label for="opt-r1" class="opt-num">1</label>
+            <input type="text" id="edit-opt1" class="opt-input" placeholder="Вариант 1">
+          </div>
+          <div class="option-row">
+            <input type="radio" name="correct" value="2" id="opt-r2">
+            <label for="opt-r2" class="opt-num">2</label>
+            <input type="text" id="edit-opt2" class="opt-input" placeholder="Вариант 2">
+          </div>
+          <div class="option-row">
+            <input type="radio" name="correct" value="3" id="opt-r3">
+            <label for="opt-r3" class="opt-num">3</label>
+            <input type="text" id="edit-opt3" class="opt-input" placeholder="Вариант 3">
+          </div>
+          <div class="option-row">
+            <input type="radio" name="correct" value="4" id="opt-r4">
+            <label for="opt-r4" class="opt-num">4</label>
+            <input type="text" id="edit-opt4" class="opt-input" placeholder="Вариант 4">
+          </div>
+          <div class="option-row">
+            <input type="radio" name="correct" value="5" id="opt-r5">
+            <label for="opt-r5" class="opt-num">5</label>
+            <input type="text" id="edit-opt5" class="opt-input" placeholder="Вариант 5 (необяз.)">
+          </div>
+        </div>
+
+        <label class="field-label">Объяснение</label>
+        <textarea id="edit-explanation" rows="5" placeholder="Объяснение правильного ответа..."></textarea>
+
+        <div class="edit-actions">
+          <button class="btn-save" id="btn-save">💾 Сохранить</button>
+          <button class="btn-delete" id="btn-delete">🗑 Удалить вопрос</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/admin.js?v=5"></script>
+</body>
+</html>
