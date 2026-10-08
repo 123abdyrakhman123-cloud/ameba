@@ -1,16 +1,16 @@
 # AMEBA Web Application Migration Design
 
-Date: 2026-10-07
+Date: 2026-10-08
 
 ## Goal
 
-Make the web application the eventual primary product for AMEBA exam preparation. Users must be able to use it directly in a browser on both phones and computers, without depending on Telegram Web Apps or bot polling. The existing Telegram bot remains in production while the web application is developed and validated in isolation.
+Build AMEBA as one learning ecosystem: the website is the full learning and analytics experience, while the existing Telegram bot remains the daily companion for quick practice, reminders, and notifications. Users should be able to continue learning across both clients with the same account, progress, and existing subject access. The responsive website must work directly in desktop and mobile browsers.
 
-The web application is not released to production until its agreed user and administrator workflows are complete and accepted. Authentication and payment integrations are later phases; they are not prerequisites for private staging validation.
+The web application is not released to production until its agreed user and administrator workflows are complete and accepted. Payment processing remains a later phase. Website login uses Telegram identity so existing purchases remain associated with the same user.
 
 ## Current State
 
-- `main.py` starts both the Telegram bot and the `aiohttp` web server in one process.
+- `main.py` starts both the Telegram bot and the `aiohttp` web server in one process. The bot's user and access records are keyed by Telegram numeric user IDs.
 - The browser client is plain HTML, CSS, and JavaScript under `static/`.
 - `static/app.js` calls the Telegram Web App API and sends Telegram `initData` to the backend.
 - `webapp_server.py` serves the current frontend and implements APIs for catalog, exams, practice, review, support, referrals, purchases, and administration.
@@ -20,29 +20,29 @@ The web application is not released to production until its agreed user and admi
 
 ## Architecture
 
-Keep the current Python `aiohttp` and static frontend stack for the first migration. Add a standalone web entry point that starts the web server without starting Telegram polling. Move learning and account-domain operations behind reusable service functions so the bot and web adapters can call the same rules where appropriate.
+Keep the current Python `aiohttp` and static frontend stack for the first migration. Develop and validate the website through a web-only entry point that does not start Telegram polling. Do not change or deploy changes to the existing bot code, commands, or runtime as part of this phase. Keep the current bot-mode application behavior intact.
 
-Keep Telegram-specific effects, such as sending bot messages, behind the bot adapter. The web interface uses browser-native pages, forms, notifications, and support tickets. The web client must not require `window.Telegram`, Telegram `initData`, or a Telegram-specific authorization header.
+Use Telegram Login Widget to authenticate website users. The website backend validates Telegram's signed login response and its freshness; it never trusts a Telegram ID supplied as plain client input. The validated Telegram numeric ID is the canonical account key for this migration and maps directly to the existing `users.user_id`, purchases, history, trials, and sessions. This preserves current entitlements without issuing replacement purchases. Keep room for a future account-identity mapping layer so Google or other providers can later link to the same canonical account.
+
+The widget requires associating the website domain with a Telegram bot in BotFather. This is a one-time domain configuration only; do not change the main bot's source code, commands, or deployment. Do not perform that external configuration as part of local implementation.
+
+Keep Telegram-specific effects, such as sending bot messages, behind the existing bot adapter. The website uses browser-native pages, forms, notifications, and support tickets. The web client must not depend on Telegram Web App `initData` or a Telegram-specific authorization header; Telegram identity is established only through the server-validated login flow.
 
 The web interface will be responsive for phone and desktop layouts. Existing learning flows can be evolved in place where they are useful, while the navigation and page structure should behave as a standalone website.
 
 ## Staging Identity
 
-For private staging, a user enters a unique username such as `Руслан11`. The first entry creates a profile; later entry with the same username resumes that profile. The server assigns an immutable internal account ID. Username comparison is trimmed and case-insensitive so spelling or letter case cannot create duplicate accounts.
-
-This username-only mode has no proof of account ownership. Staging must therefore be restricted to invited testers and must not be treated as production authentication. Administrator privileges are assigned only to explicit staging test accounts; users cannot grant themselves administrator access.
-
-Future Google sign-in should link a verified Google identity to the internal account ID. A username must not be used as the database primary key or as proof of identity. Production release remains blocked until an appropriate authentication method is implemented.
+Website users authenticate with Telegram. The validated Telegram ID resolves to the existing account, so users keep the access and learning history already associated with that ID. Do not ask users to re-enter usernames or purchase receipts to restore access. Administrator privileges remain server-assigned and must not be derived from client data.
 
 ## Data Isolation and Migration
 
-Run staging as a separate application with a separate database and storage volume. Seed it with the question catalog and synthetic test accounts, access grants, referral relationships, and histories. Do not copy production personal user records into staging, and do not share the production SQLite database with staging.
+Run development and staging as a separate application with a separate database and storage volume. Seed only the question catalog and synthetic Telegram-ID fixtures, including synthetic purchases, access grants, referral relationships, and histories. Do not copy production personal user records or the production database into staging. The web application reads existing production account and purchase records only after a separately approved production integration; preserve Telegram IDs and entitlement rows so current purchasers retain access without duplicate grants.
 
-The bot continues to use its existing production database and remains unchanged during web development. At a future cutover, take a fresh production snapshot and migrate records into the account-based model with explicit mappings from legacy Telegram user IDs. Preserve question history, exam sessions where appropriate, access grants, points, and referral relationships. Validate the migration before switching users to the web application.
+The bot continues to use its existing production database and remains unchanged during web development. Since Telegram IDs remain canonical in this phase, initial web integration needs no account-ID remapping or purchase reissuance. Any future move to provider-neutral internal IDs must explicitly map Telegram IDs and preserve purchases/access, history, sessions, points, and referral relationships. Validate that migration before adopting it.
 
 ## Web Feature Scope
 
-The first web migration covers the bot's user and administrator workflows except payment processing and production authentication.
+The first web migration establishes cross-client identity and delivers a useful web learning MVP. Payment processing stays out of scope; existing bot purchase/access records remain authoritative and are displayed and enforced by the website.
 
 User workflows:
 
@@ -51,7 +51,9 @@ User workflows:
 - Review results, history, and incorrect answers.
 - View referral links, referral counts, and eligible points. Purchase-based point awards remain inactive until payments are implemented.
 - Create support tickets and read web announcements.
-- Use staging access that administrators can grant or revoke manually. Checkout and payment confirmation are not available in this phase.
+- Use existing access grants and purchase records for Telegram-authenticated accounts. Checkout and payment confirmation are not available in this phase.
+
+Keep the learning domain extensible for later AI explanations, notes, flashcards, personalized plans, achievements, groups, progress comparisons, reminders, and subscription support. These are roadmap items, not MVP deliverables.
 
 Administrator workflows:
 
@@ -64,22 +66,23 @@ Telegram messages and bot-only commands get web equivalents for web users. Exist
 
 ## Delivery and Acceptance
 
-Develop on the dedicated branch `codex/web-app-migration`, based on the clean repository revision. Keep unrelated working-tree changes on `main` untouched. Bot development can continue on its branch; reconcile later bot changes before the web branch is integrated.
+Develop on the dedicated branch `codex/web-app-migration`, based on the clean repository revision. Keep unrelated working-tree changes on `main` untouched. Do not modify or deploy the main bot. Bot development can continue on its branch; reconcile later bot changes before the web branch is integrated. Use only synthetic user and purchase data in development and staging.
 
 The web application is ready for a release decision only when:
 
 - User and administrator workflows in scope have been exercised end to end on staging.
 - The website works at phone and desktop viewport sizes.
-- The website can start and perform its workflows without Telegram client APIs or bot polling.
-- Staging identity, roles, and data remain isolated from production.
+- The website can start and perform its workflows without Telegram Web App client APIs or bot polling.
+- Staging uses controlled Telegram-auth test fixtures, and its identity, roles, purchases, and data remain isolated from production.
+- Existing purchasers retain website access by resolving the same verified Telegram ID against existing access records; no duplicate grants are created.
 - Existing bot behavior and production data have not been changed by web staging.
-- A production data migration and rollback procedure is prepared and reviewed.
+- A production integration and rollback procedure is prepared and reviewed; no integration happens without a separate decision.
 
-Production release requires a separate explicit decision after authentication and payment phases are complete. The current bot remains available until that decision and the data cutover are complete.
+Production release requires a separate explicit decision after the agreed workflows are accepted. Payment integration remains a later phase. The current bot remains available until any future cutover is separately approved and complete.
 
 ## Security Requirements
 
-- Keep staging private because username-only profiles are claimable by anyone who can reach the site.
+- Keep staging restricted to testers and validate Telegram login signatures and freshness server-side.
 - Store secrets in the deployment secret manager or environment, never as source-code fallbacks. Any credential previously committed or embedded in source must be rotated before public release.
 - Enforce administrator roles on the server for every administrative API, not only in the browser UI.
 - Validate and authorize access to user data by internal account ID.
