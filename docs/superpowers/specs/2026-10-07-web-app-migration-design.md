@@ -4,9 +4,9 @@ Date: 2026-10-08
 
 ## Goal
 
-Build AMEBA as one learning ecosystem: the website is the full learning and analytics experience, while the existing Telegram bot remains the daily companion for quick practice, reminders, and notifications. Users should be able to continue learning across both clients with the same account, progress, and existing subject access. The responsive website must work directly in desktop and mobile browsers.
+Build AMEBA as one learning ecosystem: the website is the full learning and analytics experience, while the existing Telegram bot remains the daily companion for quick practice, reminders, and notifications. Telegram-authenticated users continue across both clients with the same account, progress, and existing subject access. New Google-authenticated users get a separate web profile in this phase. The responsive website must work directly in desktop and mobile browsers.
 
-The web application is not released to production until its agreed user and administrator workflows are complete and accepted. Payment processing remains a later phase. Website login uses Telegram identity so existing purchases remain associated with the same user.
+The web application is not released to production until its agreed user and administrator workflows are complete and accepted. Payment processing remains a later phase. Website login supports both Telegram and Google, with distinct account behavior for legacy Telegram users and new Google-only users.
 
 ## Current State
 
@@ -22,9 +22,11 @@ The web application is not released to production until its agreed user and admi
 
 Keep the current Python `aiohttp` and static frontend stack for the first migration. Develop and validate the website through a web-only entry point that does not start Telegram polling. Do not change or deploy changes to the existing bot code, commands, or runtime as part of this phase. Keep the current bot-mode application behavior intact.
 
-Use Telegram Login Widget to authenticate website users. The website backend validates Telegram's signed login response and its freshness; it never trusts a Telegram ID supplied as plain client input. The validated Telegram numeric ID is the canonical account key for this migration and maps directly to the existing `users.user_id`, purchases, history, trials, and sessions. This preserves current entitlements without issuing replacement purchases. Keep room for a future account-identity mapping layer so Google or other providers can later link to the same canonical account.
+Offer Telegram Login Widget and Google Identity Services as website login options. The website backend validates Telegram's signed login response and freshness; it never trusts a Telegram ID supplied as plain client input. A verified Telegram numeric ID maps directly to existing `users.user_id`, purchases, history, trials, and sessions, preserving current entitlements without replacement purchases.
 
-The widget requires associating the website domain with a Telegram bot in BotFather. This is a one-time domain configuration only; do not change the main bot's source code, commands, or deployment. Do not perform that external configuration as part of local implementation.
+Google login verifies Google's signed ID token on the backend and uses the stable `sub` claim as the provider identity; email is display/contact data only and is never used to merge accounts. Google-only accounts and their web progress live in web-owned tables that the Telegram bot does not query. They do not inherit Telegram purchases or bot history. If account linking is added in a later phase, it must be an explicit, verified action; do not link accounts automatically by matching email or username.
+
+Telegram Login Widget requires associating the website domain with a Telegram bot in BotFather. Google Identity Services requires a configured web OAuth client ID and authorized website origin. These are deployment prerequisites; do not change the main bot's source code, commands, or deployment, and do not perform external provider configuration as part of local implementation.
 
 Keep Telegram-specific effects, such as sending bot messages, behind the existing bot adapter. The website uses browser-native pages, forms, notifications, and support tickets. The web client must not depend on Telegram Web App `initData` or a Telegram-specific authorization header; Telegram identity is established only through the server-validated login flow.
 
@@ -32,11 +34,11 @@ The web interface will be responsive for phone and desktop layouts. Existing lea
 
 ## Staging Identity
 
-Website users authenticate with Telegram. The validated Telegram ID resolves to the existing account, so users keep the access and learning history already associated with that ID. Do not ask users to re-enter usernames or purchase receipts to restore access. Administrator privileges remain server-assigned and must not be derived from client data.
+Users who purchased access through the Telegram bot must sign in with Telegram to retain that access and existing learning history. The login screen always displays a clear reminder to choose Telegram if they have an existing bot purchase. Google sign-in creates a separate web profile with no inherited purchases/history; account linking is not part of this phase. Any manual grant for a Google profile is a web-only entitlement and must not create a row in the bot's purchase table. Administrator privileges remain server-assigned and must not be derived from client data.
 
 ## Data Isolation and Migration
 
-Run development and staging as a separate application with a separate database and storage volume. Seed only the question catalog and synthetic Telegram-ID fixtures, including synthetic purchases, access grants, referral relationships, and histories. Do not copy production personal user records or the production database into staging. The web application reads existing production account and purchase records only after a separately approved production integration; preserve Telegram IDs and entitlement rows so current purchasers retain access without duplicate grants.
+Run development and staging as a separate application with a separate database and storage volume. Seed only the question catalog and synthetic Telegram-ID fixtures, including synthetic purchases, access grants, referral relationships, and histories. Do not copy production personal user records or the production database into staging. Google-only accounts and their progress must use web-owned tables ignored by the bot; never insert Google identities into the legacy Telegram `users` or learning tables. The web application reads existing production account and purchase records only after a separately approved production integration; preserve Telegram IDs and entitlement rows so current purchasers retain access without duplicate grants.
 
 The bot continues to use its existing production database and remains unchanged during web development. Since Telegram IDs remain canonical in this phase, initial web integration needs no account-ID remapping or purchase reissuance. Any future move to provider-neutral internal IDs must explicitly map Telegram IDs and preserve purchases/access, history, sessions, points, and referral relationships. Validate that migration before adopting it.
 
@@ -51,7 +53,7 @@ User workflows:
 - Review results, history, and incorrect answers.
 - View referral links, referral counts, and eligible points. Purchase-based point awards remain inactive until payments are implemented.
 - Create support tickets and read web announcements.
-- Use existing access grants and purchase records for Telegram-authenticated accounts. Checkout and payment confirmation are not available in this phase.
+- Use existing access grants and purchase records for Telegram-authenticated accounts. Google-authenticated accounts start with a separate web profile and no inherited Telegram entitlement. Checkout and payment confirmation are not available in this phase.
 
 Keep the learning domain extensible for later AI explanations, notes, flashcards, personalized plans, achievements, groups, progress comparisons, reminders, and subscription support. These are roadmap items, not MVP deliverables.
 
@@ -83,6 +85,7 @@ Production release requires a separate explicit decision after the agreed workfl
 ## Security Requirements
 
 - Keep staging restricted to testers and validate Telegram login signatures and freshness server-side.
+- Validate Google ID token signature, audience, issuer, and expiry server-side; use `sub` as the stable identity and verify the GIS CSRF token.
 - Store secrets in the deployment secret manager or environment, never as source-code fallbacks. Any credential previously committed or embedded in source must be rotated before public release.
 - Enforce administrator roles on the server for every administrative API, not only in the browser UI.
 - Validate and authorize access to user data by internal account ID.
