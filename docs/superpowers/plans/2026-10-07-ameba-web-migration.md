@@ -1,6 +1,6 @@
 # AMEBA Web Migration Implementation Plan
 
-> Superseded by `docs/superpowers/plans/2026-10-08-ameba-shared-web-ecosystem.md`; the approved architecture uses verified Telegram identity and preserves existing purchase IDs.
+> Superseded by `docs/superpowers/plans/2026-10-08-ameba-shared-web-ecosystem.md`; the approved architecture offers Telegram and Google login, preserving Telegram purchases while isolating Google-only profiles.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
