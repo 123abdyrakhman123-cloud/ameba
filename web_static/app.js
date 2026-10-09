@@ -8,6 +8,29 @@ let examTimer = null;    // setInterval ref
 let examTimeLeft = 0;    // seconds remaining
 let currentTestQ = null; // current test question data
 let testSubject = null;
+let inviteHandled = false;
+
+function escapeHTML(value) {
+    return String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[char]));
+}
+
+async function claimInvite() {
+    if (inviteHandled || !WEB_SESSION) return;
+    const code = new URLSearchParams(window.location.search).get('ref');
+    if (!code) return;
+    inviteHandled = true;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('ref');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+    try {
+        const result = await api('POST', '/api/referral/claim', { code });
+        if (result.claimed) window.setTimeout(() => window.alert('Реферальная ссылка привязана. Вам начислены приветственные баллы.'), 0);
+    } catch (error) {
+        console.error('Referral claim failed', error);
+    }
+}
 
 // ==================== API Helper ====================
 async function api(method, path, body = null) {
@@ -154,6 +177,7 @@ async function completeLogin(path, payload) {
         return;
     }
     WEB_SESSION = session;
+    await claimInvite();
     route();
 }
 
@@ -190,9 +214,9 @@ function loadGoogleIdentity() {
                 g_csrf_token: readCookie('g_csrf_token'),
             }).then(result => {
                 if (!result.success) showLoginError(result.error || 'Не удалось войти через Google.');
-                else return api('GET', '/api/session').then(session => {
+                else return api('GET', '/api/session').then(async session => {
                     WEB_SESSION = session.authenticated ? session : null;
-                    if (WEB_SESSION) route();
+                    if (WEB_SESSION) { await claimInvite(); route(); }
                 });
             }).catch(() => showLoginError('Не удалось связаться с сервером.')),
         });
@@ -209,7 +233,7 @@ async function initializeWebClient() {
         WEB_CONFIG = await api('GET', '/api/config');
         const session = await api('GET', '/api/session');
         WEB_SESSION = session.authenticated ? session : null;
-        if (WEB_SESSION) route();
+        if (WEB_SESSION) { await claimInvite(); route(); }
         else renderLogin();
     } catch (error) {
         console.error(error);
@@ -222,13 +246,21 @@ async function initializeWebClient() {
 // --- Faculties ---
 async function renderFaculties() {
     const cfg = await loadConfig();
+    const [announcements, promo] = await Promise.all([
+        api('GET', '/api/announcements'), api('GET', '/api/promo'),
+    ]);
     let html = '<div class="header"><h1>AMEBA</h1><p>Подготовка к экзаменам</p></div>';
+    if (promo.text) html += `<div class="info-box info">${escapeHTML(promo.text)}</div>`;
+    for (const item of announcements.announcements || []) {
+        html += `<section class="info-box info"><strong>${escapeHTML(item.title)}</strong><div>${escapeHTML(item.body)}</div></section>`;
+    }
     html += '<div class="btn-list">';
     for (const [key, fac] of Object.entries(cfg.faculties)) {
         html += `<button class="btn" onclick="navigate('courses/${key}')">${fac.name}</button>`;
     }
     html += `<button class="btn" onclick="navigate('referral')">💎 Баллы и рефералка</button>`;
     html += `<button class="btn" onclick="navigate('support')">📩 Поддержка</button>`;
+    if (WEB_SESSION.is_admin) html += '<a class="btn" href="/admin">Администрирование</a>';
     html += '</div>';
     app.innerHTML = html;
 }
@@ -657,7 +689,15 @@ async function renderPurchase(subject) {
 
 // --- Support ---
 async function renderSupport() {
+    const data = await api('GET', '/api/support');
     let html = '<div class="header"><h1>📩 Поддержка</h1><p>Напишите сообщение разработчику</p></div>';
+    html += '<div class="support-history">';
+    for (const ticket of data.tickets || []) {
+        html += `<section class="question-card"><div><strong>${escapeHTML(ticket.status)}</strong><span class="row-meta"> · ${escapeHTML(ticket.created_at)}</span></div><p>${escapeHTML(ticket.message)}</p>`;
+        for (const reply of ticket.replies || []) html += `<div class="info-box info"><strong>Ответ поддержки</strong><p>${escapeHTML(reply.message)}</p></div>`;
+        html += '</section>';
+    }
+    html += '</div>';
     html += '<textarea class="support-textarea" id="supportMsg" placeholder="Ваше сообщение..."></textarea>';
     html += '<div class="btn-list">';
     html += '<button class="btn btn-primary" id="sendSupportBtn" onclick="sendSupport()">✉️ Отправить</button>';
@@ -675,9 +715,11 @@ async function sendSupport() {
 
     const res = await api('POST', '/api/support/send', { message: msg });
     if (res.success) {
-        app.innerHTML = `
-            <div class="info-box success">✅ Сообщение отправлено!</div>
-            <button class="btn" onclick="navigate('')">🏠 В меню</button>`;
+        await renderSupport();
+        const host = document.createElement('div');
+        host.className = 'info-box success';
+        host.textContent = 'Сообщение отправлено.';
+        app.prepend(host);
     } else {
         btn.disabled = false;
         btn.textContent = '✉️ Отправить';
@@ -733,7 +775,7 @@ async function renderReferral() {
 
     // Реферальная ссылка
     const refLinkHtml = d.ref_link
-        ? `<div class="ref-link-box" onclick="copyRefLink('${d.ref_link}')">
+        ? `<div class="ref-link-box" onclick="copyRefLink('${escapeHTML(d.ref_link)}')">
                <div class="ref-link-text">${d.ref_link}</div>
                <div class="ref-link-copy">📋 Скопировать</div>
            </div>`

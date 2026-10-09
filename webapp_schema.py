@@ -136,6 +136,65 @@ CREATE TABLE IF NOT EXISTS web_google_access_grants (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (google_subject, subject)
 );
+CREATE TABLE IF NOT EXISTS web_support_tickets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL CHECK (provider IN ('telegram', 'google')),
+    account_key TEXT NOT NULL,
+    message TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_web_support_owner ON web_support_tickets(provider, account_key, created_at);
+CREATE TABLE IF NOT EXISTS web_support_replies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id INTEGER NOT NULL,
+    author_provider TEXT NOT NULL CHECK (author_provider IN ('telegram', 'google', 'system')),
+    author_key TEXT NOT NULL,
+    message TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_web_support_replies_ticket ON web_support_replies(ticket_id, created_at);
+CREATE TABLE IF NOT EXISTS web_announcements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS web_promo (
+    id INTEGER PRIMARY KEY CHECK (id=1),
+    text TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS web_referral_codes (
+    provider TEXT NOT NULL,
+    account_key TEXT NOT NULL,
+    code TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(provider, account_key)
+);
+CREATE TABLE IF NOT EXISTS web_referrals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    referrer_provider TEXT NOT NULL,
+    referrer_key TEXT NOT NULL,
+    referee_provider TEXT NOT NULL,
+    referee_key TEXT NOT NULL,
+    code TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(referee_provider, referee_key)
+);
+CREATE TABLE IF NOT EXISTS web_points_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL,
+    account_key TEXT NOT NULL,
+    delta INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    related_provider TEXT,
+    related_key TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_web_points_owner ON web_points_log(provider, account_key, created_at);
 """
 
 

@@ -15,6 +15,7 @@ from aiohttp import BasicAuth, web
 from webapp_auth import validate_init_data, validate_telegram_login
 from webapp_google_auth import validate_google_id_token
 from webapp_sessions import WebIdentity, create_session, resolve_session, revoke_session
+import webapp_operations as web_operations
 
 # Lock for pickle file access
 pkl_lock = asyncio.Lock()
@@ -857,6 +858,9 @@ async def handle_support_send(request):
 ADMIN_IDS = {1427715527, 905937261, 8113642902, 771714551, 1347147831, 751240103, 1238729309, 6586083917, 921010964, 1333298810, 942664226, 1239722079}
 
 def _is_admin(request):
+    if request.app.get(WEB_SETTINGS_KEY) is not None:
+        identity = _REQUEST_WEB_IDENTITY.get()
+        return bool(identity and identity.provider == "telegram" and identity.is_admin)
     auth = request.headers.get("Authorization", "")
     # Accept session token (password login)
     if auth == ADMIN_SESSION_TOKEN:
@@ -866,6 +870,254 @@ def _is_admin(request):
     if user and user.get("id") in ADMIN_IDS:
         return True
     return False
+
+
+def require_admin(request):
+    if request.app.get(WEB_SETTINGS_KEY) is not None:
+        identity = _REQUEST_WEB_IDENTITY.get()
+        return bool(identity and identity.provider == "telegram" and identity.is_admin)
+    return _is_admin(request)
+
+
+async def handle_web_admin_check(request):
+    identity = _REQUEST_WEB_IDENTITY.get()
+    return json_response({"is_admin": bool(identity and identity.provider == "telegram" and identity.is_admin)})
+
+
+def _web_identity_or_unauthorized():
+    return _REQUEST_WEB_IDENTITY.get()
+
+
+async def handle_web_support_send(request):
+    _require_same_origin(request)
+    identity = _web_identity_or_unauthorized()
+    if not identity:
+        return error_response("Unauthorized", 401)
+    try:
+        data = await request.json()
+        ticket_id = web_operations.create_support_ticket(
+            _REQUEST_DB_PATH.get(), identity.provider, identity.account_key, data.get("message", "")
+        )
+    except (ValueError, TypeError) as exc:
+        return error_response(str(exc))
+    return json_response({"success": True, "ticket_id": ticket_id})
+
+
+async def handle_web_support_list(request):
+    identity = _web_identity_or_unauthorized()
+    if not identity:
+        return error_response("Unauthorized", 401)
+    tickets = web_operations.list_support_tickets(
+        _REQUEST_DB_PATH.get(), identity.provider, identity.account_key
+    )
+    return json_response({"tickets": tickets})
+
+
+async def handle_web_admin_support(request):
+    if not require_admin(request):
+        return error_response("Forbidden", 403)
+    return json_response({"tickets": web_operations.list_support_tickets(_REQUEST_DB_PATH.get())})
+
+
+async def handle_web_admin_support_reply(request):
+    _require_same_origin(request)
+    if not require_admin(request):
+        return error_response("Forbidden", 403)
+    identity = _REQUEST_WEB_IDENTITY.get()
+    try:
+        ticket_id = int(request.match_info["id"])
+        data = await request.json()
+        saved = web_operations.add_support_reply(
+            _REQUEST_DB_PATH.get(), ticket_id, identity.provider, identity.account_key,
+            data.get("message", ""),
+        )
+    except (ValueError, TypeError) as exc:
+        return error_response(str(exc))
+    if not saved:
+        return error_response("Ticket not found", 404)
+    return json_response({"success": True})
+
+
+async def handle_web_announcements(request):
+    return json_response({"announcements": web_operations.list_announcements(_REQUEST_DB_PATH.get())})
+
+
+async def handle_web_promo(request):
+    return json_response({"text": web_operations.get_promo(_REQUEST_DB_PATH.get())})
+
+
+async def handle_web_admin_announcement(request):
+    _require_same_origin(request)
+    if not require_admin(request):
+        return error_response("Forbidden", 403)
+    try:
+        data = await request.json()
+        item_id = web_operations.publish_announcement(
+            _REQUEST_DB_PATH.get(), data.get("title", ""), data.get("body", "")
+        )
+    except (ValueError, TypeError) as exc:
+        return error_response(str(exc))
+    return json_response({"success": True, "id": item_id})
+
+
+async def handle_web_admin_promo(request):
+    _require_same_origin(request)
+    if not require_admin(request):
+        return error_response("Forbidden", 403)
+    data = await request.json()
+    web_operations.set_promo(_REQUEST_DB_PATH.get(), data.get("text", ""))
+    return json_response({"success": True})
+
+
+async def handle_web_referral(request):
+    identity = _web_identity_or_unauthorized()
+    if not identity:
+        return error_response("Unauthorized", 401)
+    from referral_domain import LEVELS, get_or_create_referral_code, referral_level
+
+    db_path = _REQUEST_DB_PATH.get()
+    code = get_or_create_referral_code(db_path, identity.provider, identity.account_key)
+    with sqlite3.connect(db_path) as conn:
+        if identity.provider == "telegram":
+            row = conn.execute(
+                "SELECT points_balance, referral_count FROM users WHERE user_id=?",
+                (int(identity.account_key),),
+            ).fetchone()
+            balance, purchase_count = row or (0, 0)
+            invited = conn.execute(
+                "SELECT COUNT(*) FROM referrals WHERE referrer_id=?", (int(identity.account_key),)
+            ).fetchone()[0]
+            rows = conn.execute(
+                "SELECT delta, reason, subject, created_at FROM points_log WHERE user_id=? "
+                "ORDER BY id DESC LIMIT 10", (int(identity.account_key),)
+            ).fetchall()
+            ref_link = f"{request.app[WEB_SETTINGS_KEY].base_url}/?ref={code}"
+        else:
+            balance = conn.execute(
+                "SELECT COALESCE(SUM(delta),0) FROM web_points_log WHERE provider='google' AND account_key=?",
+                (identity.account_key,),
+            ).fetchone()[0]
+            purchase_count = conn.execute(
+                "SELECT COUNT(*) FROM web_referrals WHERE referrer_provider='google' AND referrer_key=?",
+                (identity.account_key,),
+            ).fetchone()[0]
+            invited = purchase_count
+            rows = conn.execute(
+                "SELECT delta, reason, '', created_at FROM web_points_log WHERE provider='google' AND account_key=? "
+                "ORDER BY id DESC LIMIT 10", (identity.account_key,),
+            ).fetchall()
+            ref_link = f"{request.app[WEB_SETTINGS_KEY].base_url}/?ref={code}"
+    level_name, bonus, spend_limit = referral_level(purchase_count)
+    upcoming = next((level for level in LEVELS if purchase_count < level[0]), None)
+    next_level = None if upcoming is None else {
+        "left": upcoming[0] - purchase_count, "name": upcoming[1],
+        "bonus": upcoming[2], "limit": upcoming[3],
+    }
+    return json_response({
+        "balance": balance, "reserved": 0, "available": balance, "spend_limit": spend_limit,
+        "level_name": level_name, "bonus_per_purchase": bonus, "referral_count": purchase_count,
+        "total_invited": invited, "next_level": next_level,
+        "history": [{"delta": row[0], "reason": row[1], "subject": row[2] or "", "date": (row[3] or "")[:10]}
+                    for row in rows],
+        "ref_link": ref_link,
+    })
+
+
+async def handle_web_referral_claim(request):
+    _require_same_origin(request)
+    identity = _web_identity_or_unauthorized()
+    if not identity:
+        return error_response("Unauthorized", 401)
+    try:
+        data = await request.json()
+    except (ValueError, json.JSONDecodeError):
+        return error_response("Invalid request")
+    from referral_domain import claim_referral
+
+    claimed = claim_referral(
+        _REQUEST_DB_PATH.get(), identity.provider, identity.account_key, data.get("code", "")
+    )
+    return json_response({"success": claimed, "claimed": claimed})
+
+
+async def handle_web_admin_accounts(request):
+    if not require_admin(request):
+        return error_response("Forbidden", 403)
+    query = request.query.get("q", "").strip()
+    if not query:
+        return json_response({"accounts": []})
+    db_path = _REQUEST_DB_PATH.get()
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        telegram_rows = conn.execute(
+            "SELECT user_id, username, full_name FROM users WHERE CAST(user_id AS TEXT)=? "
+            "OR username LIKE ? OR full_name LIKE ? LIMIT 50",
+            (query.lstrip("@"), f"%{query.lstrip('@')}%", f"%{query}%"),
+        ).fetchall()
+        google_rows = conn.execute(
+            "SELECT subject, email, display_name FROM web_google_accounts WHERE subject=? OR email LIKE ? "
+            "OR display_name LIKE ? LIMIT 50", (query, f"%{query}%", f"%{query}%"),
+        ).fetchall()
+    accounts = [
+        {"provider": "telegram", "account_key": str(row["user_id"]), "label": row["full_name"] or "",
+         "username": row["username"] or ""} for row in telegram_rows
+    ] + [
+        {"provider": "google", "account_key": row["subject"], "label": row["display_name"] or "",
+         "username": row["email"] or ""} for row in google_rows
+    ]
+    return json_response({"accounts": accounts})
+
+
+async def handle_web_admin_access(request):
+    _require_same_origin(request)
+    if not require_admin(request):
+        return error_response("Forbidden", 403)
+    try:
+        data = await request.json()
+        provider, account_key = data.get("provider"), str(data.get("account_key", "")).strip()
+        subject, action = str(data.get("subject", "")).strip().lower(), data.get("action")
+        if provider not in {"telegram", "google"} or not account_key or not subject:
+            raise ValueError("Provider, account and subject are required")
+        if action not in {"grant", "revoke"}:
+            raise ValueError("Action must be grant or revoke")
+        from webapp_catalog import FACULTIES
+        allowed_subjects = {
+            item["key"] for faculty in FACULTIES.values()
+            for subjects in faculty["subjects"].values() for item in subjects
+        }
+        if subject not in allowed_subjects:
+            raise ValueError("Unknown subject")
+        expires_at = data.get("expires_at")
+        if expires_at:
+            expires_at = datetime.fromisoformat(str(expires_at)).isoformat(sep=" ")
+        db_path = _REQUEST_DB_PATH.get()
+        with sqlite3.connect(db_path) as conn:
+            if provider == "telegram":
+                user_id = int(account_key)
+                exists = conn.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,)).fetchone()
+                if not exists:
+                    return error_response("Telegram account not found", 404)
+                if action == "grant":
+                    conn.execute("INSERT OR REPLACE INTO purchases(user_id, subject, expires_at) VALUES (?, ?, ?)",
+                                 (user_id, subject, expires_at))
+                else:
+                    conn.execute("DELETE FROM purchases WHERE user_id=? AND subject=?", (user_id, subject))
+            else:
+                exists = conn.execute("SELECT 1 FROM web_google_accounts WHERE subject=?", (account_key,)).fetchone()
+                if not exists:
+                    return error_response("Google account not found", 404)
+                if action == "grant":
+                    admin = _REQUEST_WEB_IDENTITY.get()
+                    conn.execute(
+                        "INSERT OR REPLACE INTO web_google_access_grants(google_subject, subject, expires_at, granted_by) "
+                        "VALUES (?, ?, ?, ?)", (account_key, subject, expires_at, int(admin.account_key)),
+                    )
+                else:
+                    conn.execute("DELETE FROM web_google_access_grants WHERE google_subject=? AND subject=?",
+                                 (account_key, subject))
+    except (ValueError, TypeError) as exc:
+        return error_response(str(exc))
+    return json_response({"success": True})
 
 async def handle_admin_check(request):
     """Returns whether current user is admin — used by frontend to show/hide panel."""
@@ -914,16 +1166,27 @@ async def handle_admin_login(request):
     return json_response({"success": False})
 
 async def handle_admin_questions(request):
-    if not _is_admin(request):
+    if not require_admin(request):
         return error_response("Forbidden", 403)
+    search = request.query.get("q", "").strip()
+    subject = request.query.get("subject", "").strip()
     def _fetch():
         conn = _db_conn()
+        clauses = []
+        params = []
+        if search:
+            clauses.append("(question LIKE ? OR explanation LIKE ?)")
+            params.extend((f"%{search}%", f"%{search}%"))
+        if subject:
+            clauses.append("subject=?")
+            params.append(subject)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         c = conn.cursor()
-        c.execute("""
+        c.execute(f"""
             SELECT id, subject, question, option1, option2, option3, option4, option5,
                    correct_option, COALESCE(explanation, '')
-            FROM questions ORDER BY subject, id
-        """)
+            FROM questions {where} ORDER BY subject, id LIMIT 1000
+        """, params)
         rows = c.fetchall()
         conn.close()
         return rows
@@ -940,7 +1203,9 @@ async def handle_admin_questions(request):
     return json_response({"questions": questions})
 
 async def handle_admin_question_edit(request):
-    if not _is_admin(request):
+    if request.app.get(WEB_SETTINGS_KEY) is not None:
+        _require_same_origin(request)
+    if not require_admin(request):
         return error_response("Forbidden", 403)
     q_id = request.match_info.get("id")
     try:
@@ -975,7 +1240,9 @@ async def handle_admin_question_edit(request):
     return json_response({"success": True})
 
 async def handle_admin_question_delete(request):
-    if not _is_admin(request):
+    if request.app.get(WEB_SETTINGS_KEY) is not None:
+        _require_same_origin(request)
+    if not require_admin(request):
         return error_response("Forbidden", 403)
     q_id = request.match_info.get("id")
     try:
@@ -994,7 +1261,7 @@ async def handle_admin_question_delete(request):
 
 # --- Stats ---
 async def handle_admin_stats(request):
-    if not _is_admin(request):
+    if not require_admin(request):
         return error_response("Forbidden", 403)
 
     def _get_stats():
@@ -1210,6 +1477,14 @@ async def handle_web_index(request):
         os.path.join(web_static_dir, "index.html"),
         headers={"ngrok-skip-browser-warning": "1"},
     )
+
+
+async def handle_web_admin_page(request):
+    web_static_dir = os.path.realpath(os.path.join(os.path.dirname(__file__), "web_static"))
+    filepath = os.path.join(web_static_dir, "admin.html")
+    if not os.path.isfile(filepath):
+        raise web.HTTPNotFound()
+    return web.FileResponse(filepath, headers={"ngrok-skip-browser-warning": "1"})
 
 
 async def handle_web_static(request):
@@ -1482,7 +1757,7 @@ def create_web_app(settings):
     app[WEB_SETTINGS_KEY] = settings
 
     app.router.add_get("/", handle_web_index)
-    app.router.add_get("/admin", handle_web_index)
+    app.router.add_get("/admin", handle_web_admin_page)
     app.router.add_get("/static/{filename:.+}", handle_web_static)
     app.router.add_get("/api/config", handle_web_public_config)
     app.router.add_post("/api/session/telegram", handle_telegram_session_login)
@@ -1499,4 +1774,21 @@ def create_web_app(settings):
     app.router.add_post("/api/test/answer", handle_test_answer)
     app.router.add_get("/api/test/next", handle_test_next)
     app.router.add_get("/api/review", handle_review)
+    app.router.add_post("/api/support/send", handle_web_support_send)
+    app.router.add_get("/api/support", handle_web_support_list)
+    app.router.add_get("/api/announcements", handle_web_announcements)
+    app.router.add_get("/api/promo", handle_web_promo)
+    app.router.add_get("/api/referral", handle_web_referral)
+    app.router.add_post("/api/referral/claim", handle_web_referral_claim)
+    app.router.add_get("/api/admin/check", handle_web_admin_check)
+    app.router.add_get("/api/admin/questions", handle_admin_questions)
+    app.router.add_post("/api/admin/question/{id}", handle_admin_question_edit)
+    app.router.add_post("/api/admin/question/{id}/delete", handle_admin_question_delete)
+    app.router.add_get("/api/admin/stats", handle_admin_stats)
+    app.router.add_get("/api/admin/support", handle_web_admin_support)
+    app.router.add_post("/api/admin/support/{id}/reply", handle_web_admin_support_reply)
+    app.router.add_post("/api/admin/announcements", handle_web_admin_announcement)
+    app.router.add_post("/api/admin/promo", handle_web_admin_promo)
+    app.router.add_get("/api/admin/accounts", handle_web_admin_accounts)
+    app.router.add_post("/api/admin/access", handle_web_admin_access)
     return app

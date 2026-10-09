@@ -156,10 +156,10 @@
 - Create: `referral_domain.py`
 - Modify: `webapp_schema.py`
 - Modify: `webapp_server.py`
-- Modify: `static/admin.html`
-- Modify: `static/admin.js`
-- Modify: `static/admin.css`
-- Modify: `static/app.js`
+- Create: `web_static/admin.html`
+- Create: `web_static/admin.js`
+- Create: `web_static/admin.css`
+- Modify: `web_static/app.js`
 - Test: `tests/test_web_operations.py`
 - Test: `tests/test_web_admin_api.py`
 - Test: `tests/test_web_admin_client_contract.py`
@@ -172,14 +172,14 @@
 - Telegram referrals, points, and access continue to use the legacy tables keyed by verified Telegram ID, so bot and site see the same state. Google-only referrals, points, support, and web grants use web-owned tables keyed by provider and stable subject; Google entitlements never use the legacy `purchases` table.
 - The existing bot's referral code and `main.py` are not modified. Web-specific services may share pure referral rules only when extracted without changing bot callers; otherwise preserve behavior and duplicate only the minimal tested rule.
 
-- [ ] **Step 1: Add `test_non_admin_cannot_call_admin_api` and `test_telegram_referral_state_uses_legacy_tables`** plus tests for support ownership/replies for both providers, notice visibility, promo updates, referral linking/points, Telegram access, Google web-only grants, and admin access.
-- [ ] **Step 2: Add admin client contract tests** asserting no static password token or Telegram Web App auth remains.
-- [ ] **Step 3: Run the focused operations/admin/referral tests** and confirm new routes are absent or deny unauthenticated requests.
-- [ ] **Step 4: Add isolated web operation tables and implement support, announcements, promo, referral, and points services** in web-owned modules.
-- [ ] **Step 5: Implement server-side admin authorization and admin APIs** for questions, statistics, tickets, content, accounts, and manual access.
-- [ ] **Step 6: Replace the static-password admin browser flow** with the verified session and render the approved admin workflows.
-- [ ] **Step 7: Run the complete operations/admin suite**; verify regular users cannot escalate and support content is visible only to its owner/admin.
-- [ ] **Step 8: Commit** as `feat: add web support and admin workflows`.
+- [x] **Step 1: Add `test_non_admin_cannot_call_admin_api` and `test_telegram_referral_state_uses_legacy_tables`** plus tests for support ownership/replies for both providers, notice visibility, promo updates, referral linking/points, Telegram access, Google web-only grants, and admin access.
+- [x] **Step 2: Add admin client contract tests** asserting no static password token or Telegram Web App auth remains.
+- [x] **Step 3: Run the focused operations/admin/referral tests** and confirm new routes are absent or deny unauthenticated requests.
+- [x] **Step 4: Add isolated web operation tables and implement support, announcements, promo, referral, and points services** in web-owned modules.
+- [x] **Step 5: Implement server-side admin authorization and admin APIs** for questions, statistics, tickets, content, accounts, and manual access.
+- [x] **Step 6: Replace the static-password admin browser flow** with the verified session and render the approved admin workflows.
+- [x] **Step 7: Run the complete operations/admin suite**; verify regular users cannot escalate and support content is visible only to its owner/admin.
+- [x] **Step 8: Commit** as `feat: add web support and admin workflows`.
 
 ### Task 6: Isolated Staging Seed and Acceptance
 

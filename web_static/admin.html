@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f3f6f2">
+    <title>Администрирование · АМЁБА</title>
+    <link rel="stylesheet" href="/static/admin.css?v=1">
+</head>
+<body>
+    <div class="admin-shell">
+        <header class="topbar">
+            <a class="brand" href="/">АМЁБА <span>Администрирование</span></a>
+            <div id="adminAccount" class="account" hidden><span id="adminName"></span><button id="signOut" class="icon-button" title="Выйти" aria-label="Выйти">↗</button></div>
+        </header>
+        <div id="notice" class="notice" role="status"></div>
+        <div id="authState" class="empty-state">Проверка доступа…</div>
+        <div id="adminApp" hidden>
+            <nav class="tabs" aria-label="Разделы администрирования">
+                <button class="tab active" data-view="questions">Вопросы</button>
+                <button class="tab" data-view="stats">Статистика</button>
+                <button class="tab" data-view="support">Поддержка</button>
+                <button class="tab" data-view="content">Объявления и промо</button>
+                <button class="tab" data-view="accounts">Пользователи и доступ</button>
+            </nav>
+            <main id="view" class="workspace"></main>
+        </div>
+    </div>
+    <script src="/static/admin.js?v=1"></script>
+</body>
+</html>
