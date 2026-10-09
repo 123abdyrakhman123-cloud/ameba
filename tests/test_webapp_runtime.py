@@ -114,6 +114,10 @@ class WebRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     response = await client.get(path)
                     self.assertEqual(response.status, 401, path)
 
+                response = await client.get("/healthz")
+                self.assertEqual(response.status, 200)
+                self.assertEqual(await response.text(), "ok")
+
                 response = await client.get("/", auth=BasicAuth("tester", "gate-password"))
                 self.assertEqual(response.status, 200)
 

@@ -1,0 +1,2 @@
+aiohttp==3.12.15
+google-auth==2.60.0

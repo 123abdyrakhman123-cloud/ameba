@@ -1,0 +1,18 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+COPY requirements.web.txt .
+RUN pip install --no-cache-dir -r requirements.web.txt
+
+COPY web_main.py webapp_server.py webapp_settings.py webapp_schema.py .
+COPY webapp_auth.py webapp_google_auth.py webapp_sessions.py webapp_operations.py .
+COPY webapp_catalog.py referral_domain.py .
+COPY web_static/ ./web_static/
+
+EXPOSE 8080
+
+CMD ["python", "-u", "web_main.py"]

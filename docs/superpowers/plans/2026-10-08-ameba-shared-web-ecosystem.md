@@ -186,7 +186,7 @@
 **Files:**
 - Create: `Dockerfile.web`
 - Create: `fly.staging.toml`
-- Create: `.dockerignore`
+- Create: `Dockerfile.web.dockerignore`
 - Create: `scripts/seed_web_staging.py`
 - Modify: `web_main.py`
 - Test: `tests/test_web_staging_seed.py`
@@ -197,11 +197,11 @@
 - Seed copies only question rows and creates synthetic Telegram IDs/purchases plus synthetic Google subjects and web-only profiles/progress; it never copies production user, purchase, session, referral, points, or history records.
 - Web image starts `web_main.py` only; it does not start `main.py`, Telegram polling, or `init_db.py`.
 
-- [ ] **Step 1: Add seed tests** proving only question catalog rows are copied and synthetic user/purchase fixtures are created.
-- [ ] **Step 2: Run `python -m unittest tests.test_web_staging_seed -v`** and confirm the tests fail because the seed utility is absent.
-- [ ] **Step 3: Implement the staging seed utility** with a temporary source/destination DB test; no production DB path is accepted as a destination.
-- [ ] **Step 4: Add web-only Docker/Fly staging files** with distinct app/volume identifiers and explicit secret names; exclude DBs and secret files from image context.
-- [ ] **Step 5: Add release smoke tests** for both auth contracts, Telegram existing access, Google isolated profile, catalog, practice, exam, review, support, referrals, and admin question management.
-- [ ] **Step 6: Run `python -m unittest discover -s tests -v`** and verify all tests pass.
-- [ ] **Step 7: Prepare staging deployment instructions only.** Before any remote deployment or BotFather domain change, obtain the staging app/domain and explicit confirmation; verify production app and volume are not referenced.
-- [ ] **Step 8: Commit** as `chore: prepare isolated web staging`.
+- [x] **Step 1: Add seed tests** proving only question catalog rows are copied and synthetic user/purchase fixtures are created.
+- [x] **Step 2: Run `python -m unittest tests.test_web_staging_seed -v`** and confirm the tests fail because the seed utility is absent.
+- [x] **Step 3: Implement the staging seed utility** with a temporary source/destination DB test; no production DB path is accepted as a destination.
+- [x] **Step 4: Add web-only Docker/Fly staging files** with distinct app/volume identifiers and explicit secret names; exclude DBs and secret files from image context.
+- [x] **Step 5: Add release smoke tests** for both auth contracts, Telegram existing access, Google isolated profile, catalog, practice, exam, review, support, referrals, and admin question management.
+- [x] **Step 6: Run `python -m unittest discover -s tests -v`** and verify all tests pass.
+- [x] **Step 7: Prepare staging deployment instructions only.** Before any remote deployment or BotFather domain change, obtain the staging app/domain and explicit confirmation; verify production app and volume are not referenced.
+- [x] **Step 8: Commit** as `chore: prepare isolated web staging`.

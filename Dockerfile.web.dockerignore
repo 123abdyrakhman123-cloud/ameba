@@ -1,0 +1,14 @@
+**
+!requirements.web.txt
+!web_main.py
+!webapp_server.py
+!webapp_settings.py
+!webapp_schema.py
+!webapp_auth.py
+!webapp_google_auth.py
+!webapp_sessions.py
+!webapp_operations.py
+!webapp_catalog.py
+!referral_domain.py
+!web_static/
+!web_static/**

@@ -1487,6 +1487,10 @@ async def handle_web_admin_page(request):
     return web.FileResponse(filepath, headers={"ngrok-skip-browser-warning": "1"})
 
 
+async def handle_web_health(request):
+    return web.Response(text="ok")
+
+
 async def handle_web_static(request):
     web_static_dir = os.path.realpath(os.path.join(os.path.dirname(__file__), "web_static"))
     filename = request.match_info.get("filename", "")
@@ -1525,6 +1529,8 @@ async def request_database_middleware(request, handler):
 
 @web.middleware
 async def staging_gate_middleware(request, handler):
+    if request.path == "/healthz" and request.method == "GET":
+        return await handler(request)
     settings = request.app.get(WEB_SETTINGS_KEY)
     if settings and settings.environment == "staging":
         try:
@@ -1758,6 +1764,7 @@ def create_web_app(settings):
 
     app.router.add_get("/", handle_web_index)
     app.router.add_get("/admin", handle_web_admin_page)
+    app.router.add_get("/healthz", handle_web_health)
     app.router.add_get("/static/{filename:.+}", handle_web_static)
     app.router.add_get("/api/config", handle_web_public_config)
     app.router.add_post("/api/session/telegram", handle_telegram_session_login)
