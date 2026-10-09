@@ -1,4 +1,5 @@
 import os
+import re
 from dataclasses import dataclass
 
 
@@ -18,6 +19,7 @@ class WebSettings:
     db_path: str
     session_secret: bytes
     telegram_login_bot_token: str
+    telegram_login_bot_username: str
     google_client_id: str
     environment: str
     session_ttl_seconds: int
@@ -39,6 +41,9 @@ class WebSettings:
             raise SettingsError("AMEBA_WEB_SESSION_SECRET must be at least 32 bytes")
 
         bot_token = _required(env, "AMEBA_TELEGRAM_LOGIN_BOT_TOKEN")
+        bot_username = _required(env, "AMEBA_TELEGRAM_LOGIN_BOT_USERNAME").lstrip("@")
+        if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", bot_username):
+            raise SettingsError("AMEBA_TELEGRAM_LOGIN_BOT_USERNAME must be a valid public bot username")
         google_client_id = _required(env, "AMEBA_GOOGLE_CLIENT_ID")
         environment = env.get("AMEBA_WEB_ENV", "local").strip().lower()
         if environment not in {"local", "staging"}:
@@ -80,6 +85,7 @@ class WebSettings:
             db_path=db_path,
             session_secret=secret,
             telegram_login_bot_token=bot_token,
+            telegram_login_bot_username=bot_username,
             google_client_id=google_client_id,
             environment=environment,
             session_ttl_seconds=ttl,

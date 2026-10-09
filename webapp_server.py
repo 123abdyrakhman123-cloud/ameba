@@ -4,6 +4,7 @@ import hmac
 import json
 import os
 import random
+import secrets
 import sqlite3
 import time
 from datetime import datetime
@@ -1122,6 +1123,23 @@ async def handle_static(request):
     return web.FileResponse(filepath, headers={"ngrok-skip-browser-warning": "1"})
 
 
+async def handle_web_index(request):
+    web_static_dir = os.path.join(os.path.dirname(__file__), "web_static")
+    return web.FileResponse(
+        os.path.join(web_static_dir, "index.html"),
+        headers={"ngrok-skip-browser-warning": "1"},
+    )
+
+
+async def handle_web_static(request):
+    web_static_dir = os.path.realpath(os.path.join(os.path.dirname(__file__), "web_static"))
+    filename = request.match_info.get("filename", "")
+    filepath = os.path.realpath(os.path.join(web_static_dir, filename))
+    if os.path.commonpath((web_static_dir, filepath)) != web_static_dir or not os.path.isfile(filepath):
+        raise web.HTTPNotFound()
+    return web.FileResponse(filepath, headers={"ngrok-skip-browser-warning": "1"})
+
+
 # ==================== APP FACTORY ====================
 
 @web.middleware
@@ -1279,7 +1297,16 @@ async def handle_web_session_logout(request):
 
 async def handle_web_public_config(request):
     settings = request.app[WEB_SETTINGS_KEY]
-    return json_response({"google_client_id": settings.google_client_id})
+    response = json_response({
+        "google_client_id": settings.google_client_id,
+        "telegram_bot_username": settings.telegram_login_bot_username,
+    })
+    response.set_cookie(
+        "g_csrf_token", secrets.token_urlsafe(32), max_age=300,
+        httponly=False, secure=request.secure or settings.environment == "staging",
+        samesite="Lax", path="/",
+    )
+    return response
 
 
 def create_app(bot):
@@ -1333,9 +1360,9 @@ def create_web_app(settings):
     app["db_path"] = settings.db_path
     app[WEB_SETTINGS_KEY] = settings
 
-    app.router.add_get("/", handle_index)
-    app.router.add_get("/admin", handle_admin_page)
-    app.router.add_get("/static/{filename:.+}", handle_static)
+    app.router.add_get("/", handle_web_index)
+    app.router.add_get("/admin", handle_web_index)
+    app.router.add_get("/static/{filename:.+}", handle_web_static)
     app.router.add_get("/api/config", handle_web_public_config)
     app.router.add_post("/api/session/telegram", handle_telegram_session_login)
     app.router.add_post("/api/session/google", handle_google_session_login)

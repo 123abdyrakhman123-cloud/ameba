@@ -22,6 +22,7 @@ def make_settings(db_path, **overrides):
         "AMEBA_WEB_DB_PATH": str(db_path),
         "AMEBA_WEB_SESSION_SECRET": "test-session-secret-with-enough-entropy",
         "AMEBA_TELEGRAM_LOGIN_BOT_TOKEN": "123456:test-token",
+        "AMEBA_TELEGRAM_LOGIN_BOT_USERNAME": "ameba_test_bot",
         "AMEBA_GOOGLE_CLIENT_ID": "test-client.apps.googleusercontent.com",
     } | overrides
     with patch.dict(os.environ, env, clear=True):
@@ -85,7 +86,11 @@ class WebRuntimeTests(unittest.IsolatedAsyncioTestCase):
             async with TestClient(TestServer(app)) as client:
                 response = await client.get("/")
                 self.assertEqual(response.status, 200)
+                self.assertIn("/static/app.js?v=1", await response.text())
                 self.assertTrue(db_path.exists())
+                response = await client.get("/static/app.js")
+                self.assertEqual(response.status, 200)
+                self.assertIn("credentials: 'same-origin'", await response.text())
 
             from dataclasses import replace
             with self.assertRaises(ValueError):

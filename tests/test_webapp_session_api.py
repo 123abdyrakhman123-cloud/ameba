@@ -108,7 +108,11 @@ class WebSessionApiTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get("/api/config")
         self.assertEqual(response.status, 200)
         data = await response.json()
-        self.assertEqual(data, {"google_client_id": self.settings.google_client_id})
+        self.assertEqual(data, {
+            "google_client_id": self.settings.google_client_id,
+            "telegram_bot_username": self.settings.telegram_login_bot_username,
+        })
+        self.assertIn("g_csrf_token", response.cookies)
 
 
 if __name__ == "__main__":

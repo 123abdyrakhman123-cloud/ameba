@@ -13,6 +13,7 @@ BASE_ENV = {
     "AMEBA_WEB_DB_PATH": "/tmp/ameba-web-test.db",
     "AMEBA_WEB_SESSION_SECRET": "test-session-secret-with-enough-entropy",
     "AMEBA_TELEGRAM_LOGIN_BOT_TOKEN": "123456:test-token",
+    "AMEBA_TELEGRAM_LOGIN_BOT_USERNAME": "ameba_test_bot",
     "AMEBA_GOOGLE_CLIENT_ID": "test-client.apps.googleusercontent.com",
 }
 
@@ -59,6 +60,10 @@ class WebSettingsTests(unittest.TestCase):
     def test_malformed_port_is_rejected(self):
         with self.assertRaises(SettingsError):
             self.load_settings(AMEBA_WEB_PORT="not-a-port")
+
+    def test_invalid_telegram_login_bot_username_is_rejected(self):
+        with self.assertRaises(SettingsError):
+            self.load_settings(AMEBA_TELEGRAM_LOGIN_BOT_USERNAME="not a username")
 
     def test_staging_requires_both_gate_credentials(self):
         settings = self.load_settings(

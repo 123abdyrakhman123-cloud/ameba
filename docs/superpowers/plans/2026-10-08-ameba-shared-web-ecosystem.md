@@ -54,7 +54,7 @@
 - Test: `tests/test_webapp_runtime.py`
 
 **Interfaces:**
-- `WebSettings.from_env() -> WebSettings` requires `AMEBA_WEB_DB_PATH`, `AMEBA_WEB_SESSION_SECRET`, `AMEBA_TELEGRAM_LOGIN_BOT_TOKEN`, and `AMEBA_GOOGLE_CLIENT_ID`; reads `AMEBA_WEB_ENV` (`local` or `staging`), `AMEBA_WEB_SESSION_TTL_SECONDS` (default `2592000`), `AMEBA_WEB_ADMIN_IDS`, `AMEBA_WEB_BASE_URL`, `AMEBA_WEB_HOST`/`AMEBA_WEB_PORT`, and staging gate credentials. In staging, both gate credentials are mandatory.
+- `WebSettings.from_env() -> WebSettings` requires `AMEBA_WEB_DB_PATH`, `AMEBA_WEB_SESSION_SECRET`, `AMEBA_TELEGRAM_LOGIN_BOT_TOKEN`, `AMEBA_TELEGRAM_LOGIN_BOT_USERNAME`, and `AMEBA_GOOGLE_CLIENT_ID`; the username is public and used by Telegram Login Widget, while the token remains server-only. Reads `AMEBA_WEB_ENV` (`local` or `staging`), `AMEBA_WEB_SESSION_TTL_SECONDS` (default `2592000`), `AMEBA_WEB_ADMIN_IDS`, `AMEBA_WEB_BASE_URL`, `AMEBA_WEB_HOST`/`AMEBA_WEB_PORT`, and staging gate credentials. In staging, both gate credentials are mandatory.
 - `init_web_database(db_path: str) -> None` creates the existing bot-compatible question, user, purchase, history, trial, referral, points, and session schema idempotently, plus web-owned Google profile/history/session/access tables. It never imports `init_db.py`; the bot never queries the new web-owned tables.
 - Preserve `create_app(bot) -> web.Application`; add `create_web_app(settings: WebSettings) -> web.Application` for the standalone web process. The standalone app stores `app["db_path"]` explicitly, and all web DB access uses that path.
 - `web_main.py` imports only the web entry point; it never imports `main.py`, creates a Telegram bot, or starts polling.
@@ -105,9 +105,9 @@
 ### Task 3: Browser-Native Responsive Client
 
 **Files:**
-- Modify: `static/index.html`
-- Modify: `static/app.js`
-- Modify: `static/style.css`
+- Create: `web_static/index.html`
+- Create: `web_static/app.js`
+- Create: `web_static/style.css`
 - Test: `tests/test_web_client_contract.py`
 
 **Interfaces:**
@@ -115,7 +115,7 @@
 - Telegram Login Widget posts its auth payload to `/api/session/telegram`; Google GIS posts its credential/CSRF fields to `/api/session/google`; both then use the session cookie.
 - Client calls `GET /api/session` on startup and renders login when unauthenticated.
 - Browser navigation uses History API; no `Telegram.WebApp`, Mini App `initData`, or Telegram `Authorization` header.
-- The client receives the public Google client ID from server config; no provider secret or bot token enters HTML/JavaScript.
+- The standalone web client receives the public Google client ID and Telegram bot username from server config; no provider secret or bot token enters HTML/JavaScript. Its `web_static/` bundle is separate from the Telegram Mini App's existing `static/` bundle.
 
 - [ ] **Step 1: Add browser contract tests** for both provider buttons and the Telegram-purchase reminder; permit both provider libraries but reject Telegram Web App APIs and authorization headers.
 - [ ] **Step 2: Run `python -m unittest tests.test_web_client_contract -v`** and confirm the current Mini App shell fails the contract.
