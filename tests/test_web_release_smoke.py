@@ -36,6 +36,8 @@ class WebReleaseConfigTests(unittest.TestCase):
         self.assertIn("!web_static/**", ignored)
         self.assertNotIn("!main.py", ignored)
         self.assertNotIn("!static/**", ignored)
+        self.assertIn("google-auth==", (ROOT / "requirements.web.txt").read_text())
+        self.assertNotIn("google-auth", (ROOT / "requirements.txt").read_text())
 
 
 class WebReleaseSmokeTests(unittest.IsolatedAsyncioTestCase):

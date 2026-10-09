@@ -19,7 +19,9 @@ class WebOperationsTests(unittest.IsolatedAsyncioTestCase):
             conn.execute("INSERT INTO users(user_id, username, full_name) VALUES (123, 'admin', 'Admin')")
             conn.execute("INSERT INTO users(user_id, username, full_name) VALUES (456, 'learner', 'Learner')")
             conn.execute("INSERT INTO web_google_accounts(subject, display_name) VALUES ('google-user', 'Google User')")
-        self.settings = make_settings(self.db, AMEBA_WEB_ADMIN_IDS="123")
+        self.settings = make_settings(
+            self.db, AMEBA_WEB_ADMIN_IDS="123", AMEBA_WEB_BASE_URL="https://staging.example.test"
+        )
         self.tokens = {
             "admin": create_session(str(self.db), WebIdentity("telegram", "123", "Admin", True), self.settings.session_secret, 3600),
             "telegram": create_session(str(self.db), WebIdentity("telegram", "456", "Learner", False), self.settings.session_secret, 3600),
@@ -83,6 +85,13 @@ class WebOperationsTests(unittest.IsolatedAsyncioTestCase):
             headers={"Origin": "https://attacker.invalid"},
         )
         self.assertEqual(response.status, 403)
+
+    async def test_configured_https_origin_works_behind_http_terminating_proxy(self):
+        response = await self.client.post(
+            "/api/support/send", json={"message": "Proxy origin check"}, cookies=self.cookies("google"),
+            headers={"Origin": "https://staging.example.test", "X-Forwarded-Proto": "https"},
+        )
+        self.assertEqual(response.status, 200)
 
     async def test_referrals_keep_telegram_and_google_ledgers_separate(self):
         response = await self.client.get("/api/referral", cookies=self.cookies("admin"))

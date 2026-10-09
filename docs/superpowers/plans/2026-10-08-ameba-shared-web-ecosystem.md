@@ -47,7 +47,6 @@
 - Create: `webapp_settings.py`
 - Create: `webapp_schema.py`
 - Create: `web_main.py`
-- Modify: `requirements.txt`
 - Create: `tests/__init__.py`
 - Modify: `webapp_server.py`
 - Test: `tests/test_webapp_settings.py`
@@ -64,7 +63,7 @@
 - [ ] **Step 2: Run settings tests** with `python -m unittest tests.test_webapp_settings -v`; confirm they fail because the settings module is absent.
 - [ ] **Step 3: Implement `WebSettings.from_env()`** with no database-path or secret fallback.
 - [ ] **Step 4: Add runtime tests** proving the standalone app serves from a temporary configured DB, does not import `main`, and rejects requests missing staging Basic credentials.
-- [ ] **Step 5: Implement the compatible staging schema, `create_web_app()`, and `web_main.py`**; pin `google-auth==2.60.0`, ensure standalone startup cannot select `/data/questions.db` implicitly, and defer legacy `config` imports to the bot-only path.
+- [ ] **Step 5: Implement the compatible staging schema, `create_web_app()`, and `web_main.py`**; ensure standalone startup cannot select `/data/questions.db` implicitly and defer legacy `config` imports to the bot-only path. Keep web-only dependencies out of the bot requirement set.
 - [ ] **Step 6: Run focused runtime tests** and confirm the bot factory remains callable with existing behavior.
 - [ ] **Step 7: Commit** as `feat: add isolated web runtime`.
 
@@ -187,6 +186,7 @@
 - Create: `Dockerfile.web`
 - Create: `fly.staging.toml`
 - Create: `Dockerfile.web.dockerignore`
+- Create: `requirements.web.txt`
 - Create: `scripts/seed_web_staging.py`
 - Modify: `web_main.py`
 - Test: `tests/test_web_staging_seed.py`

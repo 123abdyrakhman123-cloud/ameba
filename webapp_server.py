@@ -1556,6 +1556,15 @@ def _origin_is_same_site(request):
         return True
     try:
         parsed = urlsplit(origin)
+        settings = request.app.get(WEB_SETTINGS_KEY)
+        if settings:
+            public_origin = urlsplit(settings.base_url)
+            return (
+                public_origin.scheme in {"http", "https"}
+                and bool(public_origin.netloc)
+                and parsed.scheme.lower() == public_origin.scheme.lower()
+                and parsed.netloc.lower() == public_origin.netloc.lower()
+            )
         return parsed.scheme == request.scheme and parsed.netloc.lower() == request.host.lower()
     except ValueError:
         return False
