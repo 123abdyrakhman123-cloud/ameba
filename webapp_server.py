@@ -1827,6 +1827,93 @@ async def handle_web_session_logout(request):
     return response
 
 
+async def handle_web_dashboard(request):
+    user_id, _ = get_user_id(request)
+    if not user_id:
+        return error_response("Authentication required", 401)
+    return json_response(await asyncio.to_thread(
+        learning_data.get_dashboard_data, _REQUEST_DB_PATH.get(), _REQUEST_WEB_IDENTITY.get(),
+    ))
+
+
+async def handle_web_progress(request):
+    user_id, _ = get_user_id(request)
+    if not user_id:
+        return error_response("Authentication required", 401)
+    return json_response(await asyncio.to_thread(
+        learning_data.get_progress_data, _REQUEST_DB_PATH.get(), _REQUEST_WEB_IDENTITY.get(),
+    ))
+
+
+async def handle_web_leaderboard(request):
+    user_id, _ = get_user_id(request)
+    if not user_id:
+        return error_response("Authentication required", 401)
+    identity = _REQUEST_WEB_IDENTITY.get()
+    data = await asyncio.to_thread(
+        learning_data.get_leaderboard_data, _REQUEST_DB_PATH.get(), identity,
+    )
+    if identity.account_key == "local-demo-account":
+        data = {"enabled": False, "display_name": "", "rank": None, "entries": []}
+    return json_response(data)
+
+
+async def handle_web_leaderboard_visibility(request):
+    _require_same_origin(request)
+    user_id, _ = get_user_id(request)
+    if not user_id:
+        return error_response("Authentication required", 401)
+    identity = _REQUEST_WEB_IDENTITY.get()
+    if identity.account_key == "local-demo-account":
+        return error_response("Demo accounts cannot join the leaderboard", 403)
+    try:
+        data = await request.json()
+    except (ValueError, json.JSONDecodeError):
+        return error_response("Invalid payload", 400)
+    enabled = data.get("enabled")
+    display_name = data.get("display_name", "")
+    if not isinstance(enabled, bool) or not isinstance(display_name, str):
+        return error_response("enabled and display_name are required", 400)
+    try:
+        name = await asyncio.to_thread(
+            learning_data.save_leaderboard_profile, _REQUEST_DB_PATH.get(), identity, enabled, display_name,
+        )
+    except ValueError as exc:
+        return error_response(str(exc), 422)
+    return json_response({"success": True, "enabled": enabled, "display_name": name})
+
+
+async def handle_web_profile(request):
+    user_id, _ = get_user_id(request)
+    if not user_id:
+        return error_response("Authentication required", 401)
+    identity = _REQUEST_WEB_IDENTITY.get()
+    data = await asyncio.to_thread(
+        learning_data.get_dashboard_data, _REQUEST_DB_PATH.get(), identity,
+    )
+    settings = request.app[WEB_SETTINGS_KEY]
+    return json_response({
+        "display_name": identity.display_name,
+        "provider": identity.provider,
+        "is_demo": identity.account_key == "local-demo-account" and settings.environment == "local",
+        "access": [{"subject": item["key"], "name": item["name"], "active": item["access"]}
+                   for item in data["subjects"]],
+    })
+
+
+async def handle_web_search(request):
+    user_id, _ = get_user_id(request)
+    if not user_id:
+        return error_response("Authentication required", 401)
+    query = request.query.get("q", "").strip()
+    if len(query) > 120:
+        return error_response("Search query is too long", 422)
+    result = await asyncio.to_thread(
+        learning_data.get_search_data, _REQUEST_DB_PATH.get(), _REQUEST_WEB_IDENTITY.get(), query,
+    )
+    return json_response(result)
+
+
 def _web_learning_config(identity):
     from webapp_catalog import FACULTIES
 
@@ -1936,6 +2023,12 @@ def create_web_app(settings):
     app.router.add_post("/api/session/demo", handle_demo_session_login)
     app.router.add_get("/api/session", handle_web_session)
     app.router.add_post("/api/session/logout", handle_web_session_logout)
+    app.router.add_get("/api/dashboard", handle_web_dashboard)
+    app.router.add_get("/api/progress", handle_web_progress)
+    app.router.add_get("/api/leaderboard", handle_web_leaderboard)
+    app.router.add_post("/api/leaderboard/visibility", handle_web_leaderboard_visibility)
+    app.router.add_get("/api/profile", handle_web_profile)
+    app.router.add_get("/api/search", handle_web_search)
     app.router.add_get("/api/access", handle_access)
     app.router.add_post("/api/exam/start", handle_exam_start)
     app.router.add_get("/api/exam/question", handle_exam_question)

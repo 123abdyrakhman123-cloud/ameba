@@ -239,6 +239,13 @@ CREATE TABLE IF NOT EXISTS web_activity_events (
 );
 CREATE INDEX IF NOT EXISTS idx_web_activity_owner_time
     ON web_activity_events(provider, account_key, occurred_at);
+CREATE TABLE IF NOT EXISTS web_leaderboard_profiles (
+    provider TEXT NOT NULL CHECK (provider IN ('telegram', 'google')),
+    account_key TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    display_name TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(provider, account_key)
+);
 """
 
 

@@ -52,7 +52,7 @@ class WebRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertTrue({"questions", "users", "purchases", "question_history", "sessions"} <= tables)
             self.assertTrue({"web_sessions", "web_google_accounts", "web_google_history"} <= tables)
-            self.assertTrue({"web_exam_results", "web_exam_answers", "web_activity_events"} <= tables)
+            self.assertTrue({"web_exam_results", "web_exam_answers", "web_activity_events", "web_leaderboard_profiles"} <= tables)
             self.assertTrue({"user_id", "username", "points_balance", "referral_count"} <= users_columns)
 
     async def test_web_schema_upgrades_previous_session_table(self):
