@@ -143,6 +143,97 @@ class WebLearningApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertGreaterEqual((await response.json())["total"], 1)
 
+    async def _start_exam(self, account="telegram-a"):
+        response = await self.client.post(
+            "/api/exam/start", json={"subject": "histology"}, cookies=self.cookies(account)
+        )
+        self.assertEqual(response.status, 200)
+        return response
+
+    async def test_exam_navigation_preserves_answers_and_rejects_stale_question(self):
+        await self._start_exam()
+        response = await self.client.post(
+            "/api/exam/answer", json={"index": 0, "selected": 1}, cookies=self.cookies("telegram-a")
+        )
+        self.assertEqual(response.status, 200)
+        response = await self.client.post(
+            "/api/exam/navigate", json={"index": 0}, cookies=self.cookies("telegram-a")
+        )
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await response.json())["selected_option"], 1)
+        response = await self.client.post(
+            "/api/exam/answer", json={"index": 1, "selected": 2}, cookies=self.cookies("telegram-a")
+        )
+        self.assertEqual(response.status, 409)
+        with sqlite3.connect(self.db_path) as conn:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM web_activity_events WHERE provider='telegram' AND account_key='101'"
+            ).fetchone()[0], 1)
+
+    async def test_exam_finish_persists_summary_and_review_answers(self):
+        await self._start_exam()
+        await self.client.post(
+            "/api/exam/answer", json={"index": 0, "selected": 1}, cookies=self.cookies("telegram-a")
+        )
+        response = await self.client.post("/api/exam/finish", cookies=self.cookies("telegram-a"))
+        self.assertEqual(response.status, 200)
+        summary = await response.json()
+        self.assertIn("result_id", summary)
+        self.assertEqual(summary["answered"], 1)
+        result = await self.client.get(
+            f"/api/exam/results/{summary['result_id']}", cookies=self.cookies("telegram-a")
+        )
+        self.assertEqual(result.status, 200)
+        self.assertEqual(len((await result.json())["answers"]), 1)
+
+    async def test_exam_finish_is_idempotent(self):
+        await self._start_exam()
+        first = await self.client.post("/api/exam/finish", cookies=self.cookies("telegram-a"))
+        second = await self.client.post("/api/exam/finish", cookies=self.cookies("telegram-a"))
+        self.assertEqual(first.status, 200)
+        self.assertEqual(second.status, 200)
+        self.assertEqual((await first.json())["result_id"], (await second.json())["result_id"])
+        with sqlite3.connect(self.db_path) as conn:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM web_exam_results WHERE provider='telegram' AND account_key='101'"
+            ).fetchone()[0], 1)
+
+    async def test_repeated_exam_answer_does_not_double_count(self):
+        await self._start_exam()
+        payload = {"index": 0, "selected": 1}
+        first = await self.client.post("/api/exam/answer", json=payload, cookies=self.cookies("telegram-a"))
+        second = await self.client.post("/api/exam/answer", json=payload, cookies=self.cookies("telegram-a"))
+        self.assertEqual(first.status, 200)
+        self.assertEqual(second.status, 200)
+        with sqlite3.connect(self.db_path) as conn:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM web_activity_events WHERE provider='telegram' AND account_key='101'"
+            ).fetchone()[0], 1)
+
+    async def test_practice_activity_is_recorded_once_per_question(self):
+        await self.client.post(
+            "/api/test/start", json={"subject": "histology"}, cookies=self.cookies("telegram-a")
+        )
+        await self.client.post(
+            "/api/test/answer", json={"selected": 1}, cookies=self.cookies("telegram-a")
+        )
+        await self.client.post(
+            "/api/test/answer", json={"selected": 1}, cookies=self.cookies("telegram-a")
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM web_activity_events WHERE provider='telegram' AND account_key='101'"
+            ).fetchone()[0], 1)
+
+    async def test_exam_result_is_provider_scoped(self):
+        await self._start_exam()
+        response = await self.client.post("/api/exam/finish", cookies=self.cookies("telegram-a"))
+        result_id = (await response.json())["result_id"]
+        response = await self.client.get(
+            f"/api/exam/results/{result_id}", cookies=self.cookies("google-a")
+        )
+        self.assertEqual(response.status, 404)
+
 
 if __name__ == "__main__":
     unittest.main()

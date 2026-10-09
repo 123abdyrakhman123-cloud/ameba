@@ -16,6 +16,7 @@ from webapp_auth import validate_init_data, validate_telegram_login
 from webapp_google_auth import validate_google_id_token
 from webapp_sessions import WebIdentity, create_session, resolve_session, revoke_session
 import webapp_operations as web_operations
+import webapp_learning_data as learning_data
 
 # Lock for pickle file access
 pkl_lock = asyncio.Lock()
@@ -441,8 +442,11 @@ async def handle_exam_start(request):
         "active": True,
         "start_time": datetime.now(),
         "answers": [],
+        "answers_by_index": {},
+        "exam_session_key": secrets.token_urlsafe(20),
     }
     await asyncio.to_thread(_save_session, user_id, 'exam', session_data)
+    await asyncio.to_thread(_delete_session, user_id, 'exam_finished')
 
     return json_response({
         "total_questions": len(questions),
@@ -474,6 +478,36 @@ async def handle_exam_question(request):
         "question": question_to_dict(q),
         "question_number": idx + 1,
         "total": len(session["questions"]),
+        "index": idx,
+        "selected_option": session.get("answers_by_index", {}).get(str(idx), {}).get("selected"),
+        "time_remaining": remaining,
+    })
+
+
+async def handle_exam_navigate(request):
+    user_id, _ = get_user_id(request)
+    if not user_id:
+        return error_response("Unauthorized", 401)
+    session = await asyncio.to_thread(_load_session, user_id, 'exam')
+    if not session or not session.get("active"):
+        return error_response("No active exam", 404)
+    try:
+        index = int((await request.json()).get("index"))
+    except (TypeError, ValueError):
+        return error_response("index must be an integer")
+    if index < 0 or index >= len(session["questions"]):
+        return error_response("Question index out of range", 422)
+    elapsed = (datetime.now() - session["start_time"]).total_seconds()
+    remaining = max(0, 75 * 60 - int(elapsed))
+    if remaining <= 0:
+        return json_response({"expired": True, "time_remaining": 0})
+    session["current"] = index
+    await asyncio.to_thread(_save_session, user_id, 'exam', session)
+    return json_response({
+        "question": question_to_dict(session["questions"][index]),
+        "index": index,
+        "total": len(session["questions"]),
+        "selected_option": session.get("answers_by_index", {}).get(str(index), {}).get("selected"),
         "time_remaining": remaining,
     })
 
@@ -494,14 +528,25 @@ async def handle_exam_answer(request):
 
     data = await request.json()
     selected = data.get("selected")
-    if not selected:
+    if not isinstance(selected, int) or isinstance(selected, bool) or selected < 1 or selected > 5:
         return error_response("selected required")
 
-    idx = session["current"]
+    try:
+        idx = int(data.get("index", session["current"]))
+    except (TypeError, ValueError):
+        return error_response("index must be an integer")
+    answers_by_index = session.setdefault("answers_by_index", {})
+    previous = answers_by_index.get(str(idx))
+    if previous and idx != session["current"]:
+        return json_response({"duplicate": True, "selected_option": previous["selected"]})
+    if idx != session["current"]:
+        return error_response("Stale question", 409)
     if idx >= len(session["questions"]):
         return error_response("Exam already finished")
 
     current_q = session["questions"][idx]
+    if selected > sum(1 for option in current_q[3:8] if option):
+        return error_response("selected option does not exist", 422)
     row = await asyncio.to_thread(db_get_correct, current_q[0])
 
     correct_option = 0
@@ -512,22 +557,31 @@ async def handle_exam_answer(request):
         explanation = row[1]
         if selected == correct_option:
             is_correct = True
-            session["score"] += 2
 
-    session["answers"].append({
+    answer = {
         "question": current_q,
         "selected": selected,
         "correct": correct_option,
         "is_correct": is_correct,
         "explanation": explanation,
-    })
-    session["current"] += 1
+    }
+    answers_by_index[str(idx)] = answer
+    session["answers"] = [answers_by_index[str(i)] for i in sorted(map(int, answers_by_index))]
+    session["score"] = sum(2 for answer in answers_by_index.values() if answer["is_correct"])
+    session["current"] = idx + 1
+    identity = _REQUEST_WEB_IDENTITY.get()
+    await asyncio.to_thread(
+        learning_data.record_activity_event, _REQUEST_DB_PATH.get(), identity,
+        session["subject"], "exam_answer", f"{session['exam_session_key']}:{idx}",
+    )
 
     has_next = session["current"] < len(session["questions"])
     await asyncio.to_thread(_save_session, user_id, 'exam', session)
 
     return json_response({
         "has_next": has_next,
+        "index": idx,
+        "selected_option": selected,
         "time_remaining": remaining,
     })
 
@@ -538,18 +592,44 @@ async def handle_exam_finish(request):
         return error_response("Unauthorized", 401)
 
     session = await asyncio.to_thread(_load_session, user_id, 'exam')
-    if not session:
-        return error_response("No exam session")
+    if not session or not session.get("active"):
+        finished = await asyncio.to_thread(_load_session, user_id, 'exam_finished')
+        if finished:
+            return json_response(finished["result"])
+        return error_response("No exam session", 404)
 
+    answers_by_index = session.get("answers_by_index", {})
     answers = session.get("answers", [])
-    score = session["score"]
+    score = sum(2 for answer in answers_by_index.values() if answer["is_correct"])
     total = len(session["questions"])
-    answered = session["current"]
-    correct_count = sum(1 for a in answers if a["is_correct"])
-    errors_count = sum(1 for a in answers if not a["is_correct"])
+    answered = len(answers_by_index)
+    correct_count = sum(1 for a in answers_by_index.values() if a["is_correct"])
+    errors_count = max(0, answered - correct_count)
 
     elapsed = (datetime.now() - session["start_time"]).total_seconds()
     time_expired = elapsed >= 75 * 60
+    completed_at = datetime.now().astimezone().isoformat()
+    started_at = session["start_time"].astimezone().isoformat()
+    identity = _REQUEST_WEB_IDENTITY.get()
+    exam_summary = {
+        "exam_session_key": session["exam_session_key"], "subject": session["subject"],
+        "started_at": started_at, "completed_at": completed_at,
+        "elapsed_seconds": int(elapsed), "total": total, "answered": answered,
+        "correct": correct_count, "score": score, "max_score": total * 2,
+        "time_expired": time_expired,
+    }
+    answer_rows = [{
+        "question_id": answer["question"][0], "question_order": index,
+        "selected_option": answer["selected"], "correct_option": answer["correct"],
+        "is_correct": answer["is_correct"], "explanation": answer.get("explanation", ""),
+    } for index, answer in sorted(((int(i), answer) for i, answer in answers_by_index.items()))]
+    result_id = await asyncio.to_thread(
+        learning_data.save_exam_result, _REQUEST_DB_PATH.get(), identity, exam_summary, answer_rows,
+    )
+    await asyncio.to_thread(
+        learning_data.record_activity_event, _REQUEST_DB_PATH.get(), identity,
+        session["subject"], "exam_completed", f"{session['exam_session_key']}:completed",
+    )
 
     # Save for review
     if answers:
@@ -560,18 +640,34 @@ async def handle_exam_finish(request):
         }
         await asyncio.to_thread(_save_session, user_id, 'review', review_data)
 
+    result = {
+        "result_id": result_id, "subject": session["subject"], "score": score,
+        "max_score": total * 2, "answered": answered, "total": total,
+        "correct": correct_count, "errors": errors_count,
+        "percentage": round(score / (total * 2) * 100, 1) if total > 0 else 0,
+        "elapsed_seconds": int(elapsed), "time_expired": time_expired,
+    }
+    await asyncio.to_thread(_save_session, user_id, 'exam_finished', {"result": result})
     await asyncio.to_thread(_delete_session, user_id, 'exam')
 
-    return json_response({
-        "score": score,
-        "max_score": total * 2,
-        "answered": answered,
-        "total": total,
-        "percentage": round(score / (total * 2) * 100, 1) if total > 0 else 0,
-        "correct": correct_count,
-        "errors": errors_count,
-        "time_expired": time_expired,
-    })
+    return json_response(result)
+
+
+async def handle_exam_result(request):
+    user_id, _ = get_user_id(request)
+    if not user_id:
+        return error_response("Unauthorized", 401)
+    try:
+        result_id = int(request.match_info["result_id"])
+    except (TypeError, ValueError):
+        return error_response("Invalid result id", 404)
+    identity = _REQUEST_WEB_IDENTITY.get()
+    result = await asyncio.to_thread(
+        learning_data.get_exam_result, _REQUEST_DB_PATH.get(), identity, result_id,
+    )
+    if not result:
+        return error_response("Result not found", 404)
+    return json_response(result)
 
 
 async def handle_exam_status(request):
@@ -619,7 +715,10 @@ async def handle_test_start(request):
     q = questions[0]
     await asyncio.to_thread(db_save_history, user_id, subject, q[0])
 
-    await asyncio.to_thread(_save_session, user_id, 'test', {"subject": subject, "question": list(q), "active": True})
+    await asyncio.to_thread(_save_session, user_id, 'test', {
+        "subject": subject, "question": list(q), "active": True,
+        "attempt_key": secrets.token_urlsafe(16), "answered": False,
+    })
 
     return json_response({
         "question": question_to_dict(q),
@@ -637,6 +736,9 @@ async def handle_test_answer(request):
     session = await asyncio.to_thread(_load_session, user_id, 'test')
     if not session or not session["active"]:
         return error_response("No active test")
+
+    if session.get("answered"):
+        return json_response({**session["answer_result"], "duplicate": True})
 
     subject = session["subject"]
     data = await request.json()
@@ -673,14 +775,22 @@ async def handle_test_answer(request):
             trial_remaining = -1
             trial_limit_reached = False
 
-    return json_response({
+    answer_result = {
         "is_correct": is_correct,
         "correct_option": correct_option,
         "explanation": explanation,
         "trial_remaining": trial_remaining,
         "trial_limit_reached": trial_limit_reached,
         "has_access": has,
-    })
+    }
+    session["answered"] = True
+    session["answer_result"] = answer_result
+    await asyncio.to_thread(_save_session, user_id, 'test', session)
+    await asyncio.to_thread(
+        learning_data.record_activity_event, _REQUEST_DB_PATH.get(), _REQUEST_WEB_IDENTITY.get(),
+        subject, "practice_answer", session["attempt_key"],
+    )
+    return json_response(answer_result)
 
 
 async def handle_test_next(request):
@@ -710,6 +820,9 @@ async def handle_test_next(request):
     q = questions[0]
     await asyncio.to_thread(db_save_history, user_id, subject, q[0])
     session["question"] = list(q)
+    session["attempt_key"] = secrets.token_urlsafe(16)
+    session["answered"] = False
+    session.pop("answer_result", None)
     await asyncio.to_thread(_save_session, user_id, 'test', session)
 
     return json_response({
@@ -1777,8 +1890,10 @@ def create_app(bot):
 
     app.router.add_post("/api/exam/start", handle_exam_start)
     app.router.add_get("/api/exam/question", handle_exam_question)
+    app.router.add_post("/api/exam/navigate", handle_exam_navigate)
     app.router.add_post("/api/exam/answer", handle_exam_answer)
     app.router.add_post("/api/exam/finish", handle_exam_finish)
+    app.router.add_get("/api/exam/results/{result_id}", handle_exam_result)
     app.router.add_get("/api/exam/status", handle_exam_status)
 
     app.router.add_post("/api/test/start", handle_test_start)
@@ -1824,8 +1939,10 @@ def create_web_app(settings):
     app.router.add_get("/api/access", handle_access)
     app.router.add_post("/api/exam/start", handle_exam_start)
     app.router.add_get("/api/exam/question", handle_exam_question)
+    app.router.add_post("/api/exam/navigate", handle_exam_navigate)
     app.router.add_post("/api/exam/answer", handle_exam_answer)
     app.router.add_post("/api/exam/finish", handle_exam_finish)
+    app.router.add_get("/api/exam/results/{result_id}", handle_exam_result)
     app.router.add_get("/api/exam/status", handle_exam_status)
     app.router.add_post("/api/test/start", handle_test_start)
     app.router.add_post("/api/test/answer", handle_test_answer)

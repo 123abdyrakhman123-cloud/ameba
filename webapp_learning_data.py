@@ -215,3 +215,35 @@ def get_progress_data(db_path: str, identity: WebIdentity) -> dict:
         "subjects": sorted(by_subject.values(), key=lambda item: item["key"]),
         "exams": exams,
     }
+
+
+def get_exam_result(db_path: str, identity: WebIdentity, result_id: int) -> dict | None:
+    provider, account_key = _owner(identity)
+    with sqlite3.connect(db_path) as conn:
+        result = conn.execute(
+            "SELECT id, subject, started_at, completed_at, elapsed_seconds, total, answered, correct, "
+            "score, max_score, time_expired FROM web_exam_results "
+            "WHERE id=? AND provider=? AND account_key=?",
+            (int(result_id), provider, account_key),
+        ).fetchone()
+        if not result:
+            return None
+        answers = conn.execute(
+            "SELECT a.question_id, a.question_order, a.selected_option, a.correct_option, "
+            "a.is_correct, a.explanation, q.question, q.option1, q.option2, q.option3, q.option4, q.option5 "
+            "FROM web_exam_answers a LEFT JOIN questions q ON q.id=a.question_id "
+            "WHERE a.result_id=? ORDER BY a.question_order",
+            (int(result_id),),
+        ).fetchall()
+    summary = _result_dict(result)
+    summary.update({
+        "result_id": summary["id"],
+        "errors": max(0, summary["answered"] - summary["correct"]),
+        "percentage": round(summary["score"] * 100 / summary["max_score"], 1) if summary["max_score"] else 0,
+        "answers": [{
+            "question_id": row[0], "question_order": row[1], "selected_option": row[2],
+            "correct_option": row[3], "is_correct": bool(row[4]), "explanation": row[5],
+            "question_text": row[6] or "", "options": [option for option in row[7:12] if option],
+        } for row in answers],
+    })
+    return summary
