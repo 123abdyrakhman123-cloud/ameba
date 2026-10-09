@@ -332,3 +332,61 @@ def get_search_data(db_path: str, identity: WebIdentity, query: str) -> dict:
         "snippet": text[:180],
     } for question_id, subject, text in question_matches if subject in access]
     return {"subjects": subject_matches[:10], "questions": questions[:10]}
+
+
+def get_flashcards(db_path: str, identity: WebIdentity, subject: str, state: str | None = None) -> list[dict]:
+    provider, account_key = _owner(identity)
+    if state not in {None, "new", "known", "repeat"}:
+        raise ValueError("Unsupported flashcard state")
+    sql = (
+        "SELECT q.id, LOWER(q.subject), q.question, fs.state FROM questions q "
+        "LEFT JOIN web_flashcard_states fs ON fs.question_id=q.id AND fs.provider=? AND fs.account_key=? "
+        "WHERE LOWER(q.subject)=?"
+    )
+    params = [provider, account_key, subject.lower()]
+    if state == "new":
+        sql += " AND fs.state IS NULL"
+    elif state in {"known", "repeat"}:
+        sql += " AND fs.state=?"
+        params.append(state)
+    sql += " ORDER BY q.id LIMIT 500"
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [{"question_id": row[0], "subject": row[1], "question": row[2], "state": row[3] or "new"} for row in rows]
+
+
+def get_flashcard_subject(db_path: str, question_id: int) -> str | None:
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("SELECT LOWER(subject) FROM questions WHERE id=?", (int(question_id),)).fetchone()
+    return row[0] if row else None
+
+
+def get_flashcard_reveal(db_path: str, question_id: int) -> dict | None:
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT correct_option, option1, option2, option3, option4, option5, "
+            "COALESCE(explanation, '') FROM questions WHERE id=?",
+            (int(question_id),),
+        ).fetchone()
+    if not row:
+        return None
+    correct_option = row[0]
+    answer = row[correct_option] if isinstance(correct_option, int) and 1 <= correct_option <= 5 else ""
+    return {"correct_option": correct_option, "answer": answer or "", "explanation": row[6]}
+
+
+def save_flashcard_state(
+    db_path: str, identity: WebIdentity, question_id: int, state: str, updated_at: str | None = None,
+) -> dict:
+    provider, account_key = _owner(identity)
+    if state not in {"known", "repeat"}:
+        raise ValueError("State must be known or repeat")
+    timestamp = updated_at or datetime.now(timezone.utc).isoformat()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO web_flashcard_states(provider, account_key, question_id, state, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(provider, account_key, question_id) DO UPDATE SET "
+            "state=excluded.state, updated_at=excluded.updated_at",
+            (provider, account_key, int(question_id), state, timestamp),
+        )
+    return {"state": state, "updated_at": timestamp}

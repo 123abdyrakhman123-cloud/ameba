@@ -1914,6 +1914,79 @@ async def handle_web_search(request):
     return json_response(result)
 
 
+async def handle_web_flashcards(request):
+    user_id, _ = get_user_id(request)
+    if not user_id:
+        return error_response("Authentication required", 401)
+    subject = request.query.get("subject", "").strip().lower()
+    state = request.query.get("state")
+    if not subject:
+        return error_response("subject is required", 400)
+    if state not in {None, "new", "known", "repeat"}:
+        return error_response("Unsupported flashcard state", 422)
+    if not await asyncio.to_thread(_has_access, user_id, subject):
+        return error_response("No access", 403)
+    cards = await asyncio.to_thread(
+        learning_data.get_flashcards, _REQUEST_DB_PATH.get(), _REQUEST_WEB_IDENTITY.get(), subject, state,
+    )
+    return json_response({"cards": cards})
+
+
+async def handle_web_flashcard_reveal(request):
+    user_id, _ = get_user_id(request)
+    if not user_id:
+        return error_response("Authentication required", 401)
+    try:
+        question_id = int(request.match_info["question_id"])
+    except (TypeError, ValueError):
+        return error_response("Question not found", 404)
+    subject = await asyncio.to_thread(
+        learning_data.get_flashcard_subject, _REQUEST_DB_PATH.get(), question_id,
+    )
+    if not subject:
+        return error_response("Question not found", 404)
+    if not await asyncio.to_thread(_has_access, user_id, subject):
+        return error_response("No access", 403)
+    reveal = await asyncio.to_thread(
+        learning_data.get_flashcard_reveal, _REQUEST_DB_PATH.get(), question_id,
+    )
+    return json_response(reveal)
+
+
+async def handle_web_flashcard_review(request):
+    _require_same_origin(request)
+    user_id, _ = get_user_id(request)
+    if not user_id:
+        return error_response("Authentication required", 401)
+    try:
+        question_id = int(request.match_info["question_id"])
+        data = await request.json()
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return error_response("Invalid review payload", 400)
+    state = data.get("state")
+    if state not in {"known", "repeat"}:
+        return error_response("State must be known or repeat", 422)
+    subject = await asyncio.to_thread(
+        learning_data.get_flashcard_subject, _REQUEST_DB_PATH.get(), question_id,
+    )
+    if not subject:
+        return error_response("Question not found", 404)
+    if not await asyncio.to_thread(_has_access, user_id, subject):
+        return error_response("No access", 403)
+    identity = _REQUEST_WEB_IDENTITY.get()
+    saved = await asyncio.to_thread(
+        learning_data.save_flashcard_state, _REQUEST_DB_PATH.get(), identity, question_id, state,
+    )
+    review_key = data.get("review_key")
+    if not isinstance(review_key, str) or not review_key or len(review_key) > 100:
+        review_key = secrets.token_urlsafe(16)
+    await asyncio.to_thread(
+        learning_data.record_activity_event, _REQUEST_DB_PATH.get(), identity,
+        subject, "flashcard_review", f"flashcard:{question_id}:{review_key}",
+    )
+    return json_response(saved)
+
+
 def _web_learning_config(identity):
     from webapp_catalog import FACULTIES
 
@@ -2029,6 +2102,9 @@ def create_web_app(settings):
     app.router.add_post("/api/leaderboard/visibility", handle_web_leaderboard_visibility)
     app.router.add_get("/api/profile", handle_web_profile)
     app.router.add_get("/api/search", handle_web_search)
+    app.router.add_get("/api/flashcards", handle_web_flashcards)
+    app.router.add_get("/api/flashcards/{question_id:\\d+}/reveal", handle_web_flashcard_reveal)
+    app.router.add_post("/api/flashcards/{question_id:\\d+}/review", handle_web_flashcard_review)
     app.router.add_get("/api/access", handle_access)
     app.router.add_post("/api/exam/start", handle_exam_start)
     app.router.add_get("/api/exam/question", handle_exam_question)

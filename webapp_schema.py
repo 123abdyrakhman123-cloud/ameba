@@ -246,6 +246,16 @@ CREATE TABLE IF NOT EXISTS web_leaderboard_profiles (
     display_name TEXT NOT NULL DEFAULT '',
     PRIMARY KEY(provider, account_key)
 );
+CREATE TABLE IF NOT EXISTS web_flashcard_states (
+    provider TEXT NOT NULL CHECK (provider IN ('telegram', 'google')),
+    account_key TEXT NOT NULL,
+    question_id INTEGER NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('known', 'repeat')),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(provider, account_key, question_id)
+);
+CREATE INDEX IF NOT EXISTS idx_web_flashcard_state_lookup
+    ON web_flashcard_states(provider, account_key, state, question_id);
 """
 
 
