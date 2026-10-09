@@ -15,6 +15,14 @@ class BrowserClientContractTests(unittest.TestCase):
         self.assertIn("Google создаёт отдельный веб-аккаунт", client)
         self.assertIn("/api/session/telegram", client)
         self.assertIn("/api/session/google", client)
+        self.assertIn("/api/session/demo", client)
+        self.assertIn("WEB_CONFIG.demo_login_enabled", client)
+
+    def test_demo_session_is_visibly_marked_in_the_account_ui(self):
+        client = (ROOT / "web_static/app.js").read_text()
+        self.assertIn("WEB_SESSION.is_demo", client)
+        self.assertIn('class="demo-marker"', client)
+        self.assertIn("Демо", client)
 
     def test_client_uses_cookie_sessions_and_browser_history_not_mini_app_auth(self):
         client = (ROOT / "web_static/app.js").read_text()

@@ -27,6 +27,7 @@ class WebSettings:
     base_url: str
     host: str
     port: int
+    demo_login_enabled: bool = False
     staging_gate_user: str | None = None
     staging_gate_password: str | None = None
 
@@ -48,6 +49,12 @@ class WebSettings:
         environment = env.get("AMEBA_WEB_ENV", "local").strip().lower()
         if environment not in {"local", "staging"}:
             raise SettingsError("AMEBA_WEB_ENV must be 'local' or 'staging'")
+        demo_value = env.get("AMEBA_WEB_DEMO_LOGIN", "").strip().lower()
+        if demo_value not in {"", "0", "false", "1", "true"}:
+            raise SettingsError("AMEBA_WEB_DEMO_LOGIN must be a boolean")
+        demo_login_enabled = demo_value in {"1", "true"}
+        if demo_login_enabled and environment != "local":
+            raise SettingsError("AMEBA_WEB_DEMO_LOGIN is only available in local environment")
 
         try:
             ttl = int(env.get("AMEBA_WEB_SESSION_TTL_SECONDS", "2592000"))
@@ -93,6 +100,7 @@ class WebSettings:
             base_url=env.get("AMEBA_WEB_BASE_URL", "http://localhost:8080").rstrip("/"),
             host=env.get("AMEBA_WEB_HOST", "0.0.0.0"),
             port=port,
+            demo_login_enabled=demo_login_enabled,
             staging_gate_user=gate_user,
             staging_gate_password=gate_password,
         )

@@ -1649,6 +1649,41 @@ async def handle_google_session_login(request):
     return response
 
 
+async def handle_demo_session_login(request):
+    settings = request.app[WEB_SETTINGS_KEY]
+    if not settings.demo_login_enabled or settings.environment != "local":
+        raise web.HTTPNotFound()
+    _require_same_origin(request)
+
+    from webapp_catalog import FACULTIES
+
+    account_key = "local-demo-account"
+    display_name = "Демо-пользователь"
+    subjects = {
+        subject["key"]
+        for faculty in FACULTIES.values()
+        for course_subjects in faculty["subjects"].values()
+        for subject in course_subjects
+    }
+    with sqlite3.connect(settings.db_path) as conn:
+        conn.execute(
+            "INSERT INTO web_google_accounts(subject, email, display_name, last_seen) "
+            "VALUES (?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(subject) DO UPDATE SET "
+            "display_name=excluded.display_name, last_seen=CURRENT_TIMESTAMP",
+            (account_key, "local-demo@example.invalid", display_name),
+        )
+        conn.executemany(
+            "INSERT OR IGNORE INTO web_google_access_grants(google_subject, subject) VALUES (?, ?)",
+            [(account_key, subject) for subject in subjects],
+        )
+
+    identity = WebIdentity("google", account_key, display_name, False)
+    token = create_session(settings.db_path, identity, settings.session_secret, settings.session_ttl_seconds)
+    response = json_response({"success": True, "provider": "demo"})
+    _set_session_cookie(response, request, settings, token)
+    return response
+
+
 async def handle_web_session(request):
     settings = request.app[WEB_SETTINGS_KEY]
     identity = resolve_session(
@@ -1663,6 +1698,10 @@ async def handle_web_session(request):
         "account_key": identity.account_key,
         "display_name": identity.display_name,
         "is_admin": identity.is_admin,
+        "is_demo": (
+            identity.account_key == "local-demo-account"
+            and settings.environment == "local"
+        ),
     })
 
 
@@ -1707,6 +1746,7 @@ async def handle_web_public_config(request):
     config = {
         "google_client_id": settings.google_client_id,
         "telegram_bot_username": settings.telegram_login_bot_username,
+        "demo_login_enabled": settings.demo_login_enabled,
     }
     identity = _REQUEST_WEB_IDENTITY.get()
     if identity:
@@ -1778,6 +1818,7 @@ def create_web_app(settings):
     app.router.add_get("/api/config", handle_web_public_config)
     app.router.add_post("/api/session/telegram", handle_telegram_session_login)
     app.router.add_post("/api/session/google", handle_google_session_login)
+    app.router.add_post("/api/session/demo", handle_demo_session_login)
     app.router.add_get("/api/session", handle_web_session)
     app.router.add_post("/api/session/logout", handle_web_session_logout)
     app.router.add_get("/api/access", handle_access)

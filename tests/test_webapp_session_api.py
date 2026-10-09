@@ -91,6 +91,41 @@ class WebSessionApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM web_google_accounts").fetchone()[0], 0)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM web_sessions").fetchone()[0], 0)
 
+    async def test_demo_login_is_unavailable_by_default(self):
+        response = await self.client.post("/api/session/demo", json={})
+        self.assertEqual(response.status, 404)
+
+    async def test_demo_login_creates_non_admin_synthetic_account_when_enabled(self):
+        from dataclasses import replace
+        await self.client.close()
+        settings = replace(self.settings, demo_login_enabled=True)
+        from webapp_server import create_web_app
+        self.client = TestClient(TestServer(create_web_app(settings)))
+        await self.client.start_server()
+
+        response = await self.client.post("/api/session/demo", json={})
+        self.assertEqual(response.status, 200)
+        self.assertTrue(response.cookies["ameba_session"]["httponly"])
+        session = await self.client.get("/api/session")
+        self.assertEqual(session.status, 200)
+        identity = await session.json()
+        self.assertEqual(identity["provider"], "google")
+        self.assertEqual(identity["display_name"], "Демо-пользователь")
+        self.assertTrue(identity["is_demo"])
+        self.assertFalse(identity["is_admin"])
+        config = await self.client.get("/api/config")
+        self.assertTrue((await config.json())["access"]["histology"])
+        with sqlite3.connect(self.db_path) as conn:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM web_google_accounts WHERE subject='local-demo-account'"
+            ).fetchone()[0], 1)
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM users WHERE username='local_demo'"
+            ).fetchone()[0], 0)
+            self.assertGreater(conn.execute(
+                "SELECT COUNT(*) FROM web_google_access_grants WHERE google_subject='local-demo-account'"
+            ).fetchone()[0], 0)
+
     async def test_session_restore_logout_and_cross_origin_rejection(self):
         identity = WebIdentity("google", "google-sub-2", "User", False)
         token = create_session(str(self.db_path), identity, self.settings.session_secret, 3600)
@@ -111,6 +146,7 @@ class WebSessionApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data, {
             "google_client_id": self.settings.google_client_id,
             "telegram_bot_username": self.settings.telegram_login_bot_username,
+            "demo_login_enabled": False,
         })
         self.assertIn("g_csrf_token", response.cookies)
 

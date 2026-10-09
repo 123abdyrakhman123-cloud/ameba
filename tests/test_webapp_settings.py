@@ -75,6 +75,21 @@ class WebSettingsTests(unittest.TestCase):
         self.assertEqual(settings.staging_gate_user, "tester")
         self.assertEqual(settings.staging_gate_password, "long-random-password")
 
+    def test_demo_login_is_explicitly_local_only(self):
+        settings = self.load_settings(AMEBA_WEB_DEMO_LOGIN="true")
+        self.assertTrue(settings.demo_login_enabled)
+
+        with self.assertRaises(SettingsError):
+            self.load_settings(
+                AMEBA_WEB_ENV="staging",
+                AMEBA_STAGING_GATE_USER="tester",
+                AMEBA_STAGING_GATE_PASSWORD="long-random-password",
+                AMEBA_WEB_DEMO_LOGIN="1",
+            )
+
+        with self.assertRaises(SettingsError):
+            self.load_settings(AMEBA_WEB_DEMO_LOGIN="sometimes")
+
 
 if __name__ == "__main__":
     unittest.main()

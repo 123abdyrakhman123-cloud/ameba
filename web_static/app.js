@@ -146,8 +146,9 @@ function renderLogin(message = '') {
                 <h1>Войдите в аккаунт</h1>
                 <p class="login-subtitle">Продолжайте подготовку с любого устройства.</p>
                 <div class="login-provider-block">
-                    <div id="telegramLoginWidget" class="telegram-login-widget"><span>Telegram Login Widget</span></div>
-                    <div id="googleSignInButton" class="google-signin-button"></div>
+                <div id="telegramLoginWidget" class="telegram-login-widget"><span>Telegram Login Widget</span></div>
+                <div id="googleSignInButton" class="google-signin-button"></div>
+                ${WEB_CONFIG.demo_login_enabled ? '<button class="demo-login-button" id="demoLoginButton" type="button">Войти в демо-режим</button>' : ''}
                 </div>
                 <div class="login-reminder"><strong>Уже покупали доступ в боте?</strong><span>Если вы уже покупали доступ в боте, войдите через Telegram, чтобы увидеть свои покупки и прогресс.</span></div>
                 <p class="login-separation">Google создаёт отдельный веб-аккаунт, покупки Telegram в него не переносятся.</p>
@@ -158,6 +159,9 @@ function renderLogin(message = '') {
     document.getElementById('loginError').textContent = message;
     loadTelegramWidget();
     loadGoogleIdentity();
+    const demoButton = document.getElementById('demoLoginButton');
+    if (demoButton) demoButton.addEventListener('click', () => completeLogin('/api/session/demo', {})
+        .catch(() => showLoginError('Не удалось войти в демо-режим.')));
 }
 
 function showLoginError(message) {
@@ -249,7 +253,7 @@ async function renderFaculties() {
     const [announcements, promo] = await Promise.all([
         api('GET', '/api/announcements'), api('GET', '/api/promo'),
     ]);
-    let html = '<div class="header"><h1>AMEBA</h1><p>Подготовка к экзаменам</p></div>';
+    let html = `<div class="header"><h1>AMEBA</h1><p>Подготовка к экзаменам</p>${WEB_SESSION.is_demo ? '<span class="demo-marker">Демо</span>' : ''}</div>`;
     if (promo.text) html += `<div class="info-box info">${escapeHTML(promo.text)}</div>`;
     for (const item of announcements.announcements || []) {
         html += `<section class="info-box info"><strong>${escapeHTML(item.title)}</strong><div>${escapeHTML(item.body)}</div></section>`;
