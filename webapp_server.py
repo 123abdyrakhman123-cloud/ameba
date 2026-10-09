@@ -1,13 +1,14 @@
 import asyncio
+import contextvars
+import hmac
 import json
 import os
 import random
 import sqlite3
 from datetime import datetime
 
-from aiohttp import web
+from aiohttp import BasicAuth, web
 
-import config
 from webapp_auth import validate_init_data
 
 # Lock for pickle file access
@@ -17,12 +18,24 @@ pkl_lock = asyncio.Lock()
 SHARED = {}
 
 DB_PATH = "/data/questions.db"
+_REQUEST_DB_PATH = contextvars.ContextVar("webapp_db_path", default=DB_PATH)
+WEB_SETTINGS_KEY = web.AppKey("web_settings", object)
+
+
+def _legacy_api_token():
+    import config
+    return config.API_TOKEN
+
+
+def _run_in_executor(loop, function):
+    context = contextvars.copy_context()
+    return loop.run_in_executor(None, context.run, function)
 
 
 def get_user_id(request):
     """Extract and validate Telegram user from initData."""
     init_data = request.headers.get("Authorization", "")
-    user = validate_init_data(init_data, config.API_TOKEN)
+    user = validate_init_data(init_data, _legacy_api_token())
     if not user:
         return None, None
     return user.get("id"), user
@@ -39,7 +52,7 @@ def error_response(msg, status=400):
 # ==================== DB helpers (sync, run in thread) ====================
 
 def db_get_questions(subject, limit=500):
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_conn()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM questions WHERE LOWER(subject)=?", (subject.lower(),))
     questions = cursor.fetchall()
@@ -50,7 +63,7 @@ def db_get_questions(subject, limit=500):
 
 
 def db_get_questions_excluding(subject, exclude_ids, limit=1):
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_conn()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM questions WHERE LOWER(subject)=?", (subject.lower(),))
     all_q = cursor.fetchall()
@@ -64,7 +77,7 @@ def db_get_questions_excluding(subject, exclude_ids, limit=1):
 
 
 def db_get_recent_ids(user_id, subject, limit=100):
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_conn()
     cursor = conn.cursor()
     cursor.execute(
         "SELECT question_id FROM question_history "
@@ -77,7 +90,7 @@ def db_get_recent_ids(user_id, subject, limit=100):
 
 
 def db_save_history(user_id, subject, question_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_conn()
     cursor = conn.cursor()
     cursor.execute(
         "INSERT INTO question_history (user_id, subject, question_id) VALUES (?, ?, ?)",
@@ -88,7 +101,7 @@ def db_save_history(user_id, subject, question_id):
 
 
 def db_save_history_batch(user_id, subject, question_ids):
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_conn()
     cursor = conn.cursor()
     cursor.executemany(
         "INSERT INTO question_history (user_id, subject, question_id) VALUES (?, ?, ?)",
@@ -99,7 +112,7 @@ def db_save_history_batch(user_id, subject, question_ids):
 
 
 def db_get_correct(question_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_conn()
     cursor = conn.cursor()
     cursor.execute(
         "SELECT correct_option, COALESCE(explanation, '') FROM questions WHERE id=?",
@@ -116,7 +129,7 @@ import sqlite3 as _sqlite3
 import json as _json
 
 def _db_conn():
-    return _sqlite3.connect(DB_PATH)
+    return _sqlite3.connect(_REQUEST_DB_PATH.get())
 
 def _save_session(user_id, session_type, data):
     """Сохраняет сессию в SQLite."""
@@ -763,7 +776,7 @@ def _is_admin(request):
     if auth == ADMIN_SESSION_TOKEN:
         return True
     # Accept Telegram initData
-    user = validate_init_data(auth, config.API_TOKEN)
+    user = validate_init_data(auth, _legacy_api_token())
     if user and user.get("id") in ADMIN_IDS:
         return True
     return False
@@ -779,7 +792,7 @@ async def handle_admin_check(request):
     user = None
 
     # Try strict validation first
-    user = validate_init_data(init_data, config.API_TOKEN)
+    user = validate_init_data(init_data, _legacy_api_token())
     print(f"[ADMIN_CHECK] strict_validate={user}")
 
     if not user:
@@ -818,7 +831,7 @@ async def handle_admin_questions(request):
     if not _is_admin(request):
         return error_response("Forbidden", 403)
     def _fetch():
-        conn = _sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         c = conn.cursor()
         c.execute("""
             SELECT id, subject, question, option1, option2, option3, option4, option5,
@@ -828,7 +841,7 @@ async def handle_admin_questions(request):
         rows = c.fetchall()
         conn.close()
         return rows
-    rows = await asyncio.get_event_loop().run_in_executor(None, _fetch)
+    rows = await _run_in_executor(asyncio.get_event_loop(), _fetch)
     questions = [
         {
             "id": r[0], "subject": r[1], "question": r[2],
@@ -864,7 +877,7 @@ async def handle_admin_question_edit(request):
     except (ValueError, TypeError):
         return error_response("Invalid correct_option")
     def _update():
-        conn = _sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         c = conn.cursor()
         c.execute("""
             UPDATE questions SET question=?, option1=?, option2=?, option3=?, option4=?, option5=?,
@@ -872,7 +885,7 @@ async def handle_admin_question_edit(request):
         """, (question, option1, option2, option3, option4, option5, correct, explanation, q_id))
         conn.commit()
         conn.close()
-    await asyncio.get_event_loop().run_in_executor(None, _update)
+    await _run_in_executor(asyncio.get_event_loop(), _update)
     return json_response({"success": True})
 
 async def handle_admin_question_delete(request):
@@ -884,12 +897,12 @@ async def handle_admin_question_delete(request):
     except (ValueError, TypeError):
         return error_response("Invalid id")
     def _delete():
-        conn = _sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         c = conn.cursor()
         c.execute("DELETE FROM questions WHERE id=?", (q_id,))
         conn.commit()
         conn.close()
-    await asyncio.get_event_loop().run_in_executor(None, _delete)
+    await _run_in_executor(asyncio.get_event_loop(), _delete)
     return json_response({"success": True})
 
 
@@ -899,7 +912,7 @@ async def handle_admin_stats(request):
         return error_response("Forbidden", 403)
 
     def _get_stats():
-        conn = _sqlite3.connect(DB_PATH)
+        conn = _db_conn()
         c = conn.cursor()
 
         # Всего пользователей
@@ -988,7 +1001,7 @@ async def handle_admin_stats(request):
             "top_referrers": top_referrers,
         }
 
-    stats = await asyncio.get_event_loop().run_in_executor(None, _get_stats)
+    stats = await _run_in_executor(asyncio.get_event_loop(), _get_stats)
     return json_response(stats)
 
 
@@ -1114,10 +1127,40 @@ async def ngrok_middleware(request, handler):
     return response
 
 
+@web.middleware
+async def request_database_middleware(request, handler):
+    token = _REQUEST_DB_PATH.set(request.app.get("db_path", DB_PATH))
+    try:
+        return await handler(request)
+    finally:
+        _REQUEST_DB_PATH.reset(token)
+
+
+@web.middleware
+async def staging_gate_middleware(request, handler):
+    settings = request.app.get(WEB_SETTINGS_KEY)
+    if settings and settings.environment == "staging":
+        try:
+            credentials = BasicAuth.decode(request.headers.get("Authorization", ""))
+        except (ValueError, UnicodeDecodeError):
+            credentials = None
+        username_ok = bool(credentials) and hmac.compare_digest(
+            credentials.login, settings.staging_gate_user
+        )
+        password_ok = bool(credentials) and hmac.compare_digest(
+            credentials.password, settings.staging_gate_password
+        )
+        if not (username_ok and password_ok):
+            raise web.HTTPUnauthorized(
+                headers={"WWW-Authenticate": 'Basic realm="AMEBA staging"'}
+            )
+    return await handler(request)
+
+
 def create_app(bot):
     SHARED["bot"] = bot
 
-    app = web.Application(middlewares=[ngrok_middleware])
+    app = web.Application(middlewares=[request_database_middleware, ngrok_middleware])
 
     static_dir = os.path.join(os.path.dirname(__file__), "static")
 
@@ -1152,4 +1195,19 @@ def create_app(bot):
     app.router.add_post("/api/admin/question/{id}/delete", handle_admin_question_delete)
     app.router.add_get("/api/admin/stats", handle_admin_stats)
 
+    return app
+
+
+def create_web_app(settings):
+    from webapp_schema import init_web_database
+
+    init_web_database(settings.db_path)
+    app = web.Application(middlewares=[staging_gate_middleware, request_database_middleware, ngrok_middleware])
+    app["db_path"] = settings.db_path
+    app[WEB_SETTINGS_KEY] = settings
+
+    app.router.add_get("/", handle_index)
+    app.router.add_get("/admin", handle_admin_page)
+    app.router.add_get("/static/{filename:.+}", handle_static)
+    app.router.add_get("/api/config", handle_config)
     return app
