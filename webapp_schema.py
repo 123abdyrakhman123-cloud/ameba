@@ -195,6 +195,50 @@ CREATE TABLE IF NOT EXISTS web_points_log (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_web_points_owner ON web_points_log(provider, account_key, created_at);
+CREATE TABLE IF NOT EXISTS web_exam_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL CHECK (provider IN ('telegram', 'google')),
+    account_key TEXT NOT NULL,
+    exam_session_key TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    elapsed_seconds INTEGER NOT NULL DEFAULT 0,
+    total INTEGER NOT NULL DEFAULT 0,
+    answered INTEGER NOT NULL DEFAULT 0,
+    correct INTEGER NOT NULL DEFAULT 0,
+    score INTEGER NOT NULL DEFAULT 0,
+    max_score INTEGER NOT NULL DEFAULT 0,
+    time_expired INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(provider, account_key, exam_session_key)
+);
+CREATE INDEX IF NOT EXISTS idx_web_exam_owner_time
+    ON web_exam_results(provider, account_key, completed_at DESC);
+CREATE TABLE IF NOT EXISTS web_exam_answers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    result_id INTEGER NOT NULL REFERENCES web_exam_results(id) ON DELETE CASCADE,
+    question_id INTEGER NOT NULL,
+    question_order INTEGER NOT NULL,
+    selected_option INTEGER,
+    correct_option INTEGER,
+    is_correct INTEGER NOT NULL DEFAULT 0,
+    explanation TEXT NOT NULL DEFAULT '',
+    UNIQUE(result_id, question_order)
+);
+CREATE INDEX IF NOT EXISTS idx_web_exam_answers_result
+    ON web_exam_answers(result_id, question_order);
+CREATE TABLE IF NOT EXISTS web_activity_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL CHECK (provider IN ('telegram', 'google')),
+    account_key TEXT NOT NULL,
+    subject TEXT NOT NULL DEFAULT '',
+    event_type TEXT NOT NULL,
+    event_key TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    UNIQUE(provider, account_key, event_key)
+);
+CREATE INDEX IF NOT EXISTS idx_web_activity_owner_time
+    ON web_activity_events(provider, account_key, occurred_at);
 """
 
 
