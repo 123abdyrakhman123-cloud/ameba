@@ -32,7 +32,7 @@ class WebSettings:
     def from_env(cls) -> "WebSettings":
         env = dict(os.environ)
         db_path = _required(env, "AMEBA_WEB_DB_PATH")
-        if os.path.normpath(db_path) == "/data/questions.db":
+        if os.path.realpath(db_path) == os.path.realpath("/data/questions.db"):
             raise SettingsError("The production database path is not allowed in web development or staging")
         secret = _required(env, "AMEBA_WEB_SESSION_SECRET").encode("utf-8")
         if len(secret) < 32:

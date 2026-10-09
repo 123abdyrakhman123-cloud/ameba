@@ -53,6 +53,25 @@ class WebRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue({"web_sessions", "web_google_accounts", "web_google_history"} <= tables)
             self.assertTrue({"user_id", "username", "points_balance", "referral_count"} <= users_columns)
 
+    async def test_web_schema_upgrades_previous_session_table(self):
+        from webapp_schema import init_web_database
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "older-web.db"
+            with sqlite3.connect(db_path) as conn:
+                conn.execute("""
+                    CREATE TABLE web_sessions (
+                        token_hash TEXT PRIMARY KEY, provider TEXT NOT NULL,
+                        account_key TEXT NOT NULL, expires_at INTEGER NOT NULL,
+                        created_at INTEGER NOT NULL, revoked_at INTEGER
+                    )
+                """)
+            init_web_database(str(db_path))
+            init_web_database(str(db_path))
+            with sqlite3.connect(db_path) as conn:
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(web_sessions)")}
+            self.assertIn("display_name", columns)
+
     async def test_standalone_app_uses_explicit_temporary_database(self):
         import webapp_server
         create_web_app = getattr(webapp_server, "create_web_app", None)
@@ -67,6 +86,10 @@ class WebRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 response = await client.get("/")
                 self.assertEqual(response.status, 200)
                 self.assertTrue(db_path.exists())
+
+            from dataclasses import replace
+            with self.assertRaises(ValueError):
+                create_web_app(replace(make_settings(db_path), db_path="/data/questions.db"))
 
     async def test_staging_gate_protects_pages_assets_and_api_routes(self):
         import webapp_server

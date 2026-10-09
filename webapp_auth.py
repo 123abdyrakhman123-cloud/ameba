@@ -2,7 +2,44 @@ import hmac
 import hashlib
 import json
 import time
+from dataclasses import dataclass
+from typing import Mapping
 from urllib.parse import parse_qs, unquote
+
+
+@dataclass(frozen=True)
+class TelegramIdentity:
+    user_id: int
+    first_name: str
+    username: str | None
+    photo_url: str | None
+
+
+def validate_telegram_login(
+    data: Mapping[str, str], bot_token: str, now: int, max_age_seconds: int = 300
+) -> TelegramIdentity | None:
+    try:
+        received_hash = data.get("hash")
+        if not isinstance(received_hash, str) or len(received_hash) != 64:
+            return None
+        values = {str(key): str(value) for key, value in data.items() if key != "hash"}
+        auth_date = int(values["auth_date"])
+        user_id = int(values["id"])
+        if user_id <= 0 or auth_date <= 0 or auth_date > now or now - auth_date > max_age_seconds:
+            return None
+        check_string = "\n".join(f"{key}={value}" for key, value in sorted(values.items()))
+        secret_key = hashlib.sha256(bot_token.encode("utf-8")).digest()
+        expected_hash = hmac.new(secret_key, check_string.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected_hash, received_hash.lower()):
+            return None
+        return TelegramIdentity(
+            user_id=user_id,
+            first_name=values.get("first_name", "").strip(),
+            username=values.get("username") or None,
+            photo_url=values.get("photo_url") or None,
+        )
+    except (KeyError, TypeError, ValueError, UnicodeError):
+        return None
 
 
 def validate_init_data(init_data: str, bot_token: str, max_age: int = 86400 * 30) -> dict | None:

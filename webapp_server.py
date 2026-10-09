@@ -5,11 +5,15 @@ import json
 import os
 import random
 import sqlite3
+import time
 from datetime import datetime
+from urllib.parse import urlsplit
 
 from aiohttp import BasicAuth, web
 
-from webapp_auth import validate_init_data
+from webapp_auth import validate_init_data, validate_telegram_login
+from webapp_google_auth import validate_google_id_token
+from webapp_sessions import WebIdentity, create_session, resolve_session, revoke_session
 
 # Lock for pickle file access
 pkl_lock = asyncio.Lock()
@@ -1157,6 +1161,127 @@ async def staging_gate_middleware(request, handler):
     return await handler(request)
 
 
+def _origin_is_same_site(request):
+    origin = request.headers.get("Origin")
+    if not origin:
+        return True
+    try:
+        parsed = urlsplit(origin)
+        return parsed.scheme == request.scheme and parsed.netloc.lower() == request.host.lower()
+    except ValueError:
+        return False
+
+
+def _require_same_origin(request):
+    if not _origin_is_same_site(request):
+        raise web.HTTPForbidden(text="Cross-origin request rejected")
+
+
+def _session_token(request):
+    return request.cookies.get("ameba_session", "")
+
+
+def _set_session_cookie(response, request, settings, token):
+    response.set_cookie(
+        "ameba_session", token, max_age=settings.session_ttl_seconds,
+        httponly=True, secure=request.secure or settings.environment == "staging",
+        samesite="Lax", path="/",
+    )
+
+
+async def handle_telegram_session_login(request):
+    _require_same_origin(request)
+    try:
+        payload = await request.json()
+    except (ValueError, json.JSONDecodeError):
+        return error_response("Invalid login payload", 400)
+    settings = request.app[WEB_SETTINGS_KEY]
+    telegram = validate_telegram_login(
+        payload, settings.telegram_login_bot_token, now=int(time.time())
+    )
+    if not telegram:
+        return error_response("Telegram verification failed", 401)
+
+    full_name = telegram.first_name.strip()
+    with sqlite3.connect(settings.db_path) as conn:
+        conn.execute(
+            "INSERT INTO users(user_id, username, full_name, last_seen) VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(user_id) DO UPDATE SET username=excluded.username, "
+            "full_name=excluded.full_name, last_seen=CURRENT_TIMESTAMP",
+            (telegram.user_id, telegram.username, full_name),
+        )
+    identity = WebIdentity(
+        "telegram", str(telegram.user_id), full_name or str(telegram.user_id),
+        telegram.user_id in settings.admin_ids,
+    )
+    token = create_session(settings.db_path, identity, settings.session_secret, settings.session_ttl_seconds)
+    response = json_response({"success": True, "provider": "telegram"})
+    _set_session_cookie(response, request, settings, token)
+    return response
+
+
+async def handle_google_session_login(request):
+    try:
+        form = await request.post()
+    except (ValueError, UnicodeDecodeError):
+        return error_response("Invalid login payload", 400)
+    body_csrf = form.get("g_csrf_token", "")
+    cookie_csrf = request.cookies.get("g_csrf_token", "")
+    if not body_csrf or not cookie_csrf or not hmac.compare_digest(body_csrf, cookie_csrf):
+        return error_response("Google CSRF validation failed", 403)
+    settings = request.app[WEB_SETTINGS_KEY]
+    google = await asyncio.to_thread(
+        validate_google_id_token, form.get("credential", ""), settings.google_client_id
+    )
+    if not google:
+        return error_response("Google verification failed", 401)
+
+    with sqlite3.connect(settings.db_path) as conn:
+        conn.execute(
+            "INSERT INTO web_google_accounts(subject, email, display_name, picture, last_seen) "
+            "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(subject) DO UPDATE SET "
+            "email=excluded.email, display_name=excluded.display_name, picture=excluded.picture, "
+            "last_seen=CURRENT_TIMESTAMP",
+            (google.subject, google.email, google.display_name, google.picture),
+        )
+    identity = WebIdentity("google", google.subject, google.display_name or google.subject, False)
+    token = create_session(settings.db_path, identity, settings.session_secret, settings.session_ttl_seconds)
+    response = json_response({"success": True, "provider": "google"})
+    _set_session_cookie(response, request, settings, token)
+    return response
+
+
+async def handle_web_session(request):
+    settings = request.app[WEB_SETTINGS_KEY]
+    identity = resolve_session(
+        settings.db_path, _session_token(request), settings.session_secret,
+        now=int(time.time()), admin_ids=settings.admin_ids,
+    )
+    if not identity:
+        return error_response("Authentication required", 401)
+    return json_response({
+        "authenticated": True,
+        "provider": identity.provider,
+        "account_key": identity.account_key,
+        "display_name": identity.display_name,
+        "is_admin": identity.is_admin,
+    })
+
+
+async def handle_web_session_logout(request):
+    _require_same_origin(request)
+    settings = request.app[WEB_SETTINGS_KEY]
+    revoke_session(settings.db_path, _session_token(request), settings.session_secret)
+    response = json_response({"success": True})
+    response.del_cookie("ameba_session", path="/")
+    return response
+
+
+async def handle_web_public_config(request):
+    settings = request.app[WEB_SETTINGS_KEY]
+    return json_response({"google_client_id": settings.google_client_id})
+
+
 def create_app(bot):
     SHARED["bot"] = bot
 
@@ -1201,6 +1326,8 @@ def create_app(bot):
 def create_web_app(settings):
     from webapp_schema import init_web_database
 
+    if os.path.realpath(settings.db_path) == os.path.realpath(DB_PATH):
+        raise ValueError("The production bot database cannot be used by the standalone web app")
     init_web_database(settings.db_path)
     app = web.Application(middlewares=[staging_gate_middleware, request_database_middleware, ngrok_middleware])
     app["db_path"] = settings.db_path
@@ -1209,5 +1336,9 @@ def create_web_app(settings):
     app.router.add_get("/", handle_index)
     app.router.add_get("/admin", handle_admin_page)
     app.router.add_get("/static/{filename:.+}", handle_static)
-    app.router.add_get("/api/config", handle_config)
+    app.router.add_get("/api/config", handle_web_public_config)
+    app.router.add_post("/api/session/telegram", handle_telegram_session_login)
+    app.router.add_post("/api/session/google", handle_google_session_login)
+    app.router.add_get("/api/session", handle_web_session)
+    app.router.add_post("/api/session/logout", handle_web_session_logout)
     return app

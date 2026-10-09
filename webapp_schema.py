@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS web_sessions (
     token_hash TEXT PRIMARY KEY,
     provider TEXT NOT NULL CHECK (provider IN ('telegram', 'google')),
     account_key TEXT NOT NULL,
+    display_name TEXT NOT NULL DEFAULT '',
     expires_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
     revoked_at INTEGER
@@ -157,3 +158,6 @@ def init_web_database(db_path: str) -> None:
             if name not in existing_columns:
                 conn.execute(f"ALTER TABLE users ADD COLUMN {name} {definition}")
         conn.executescript(WEB_SCHEMA)
+        session_columns = {row[1] for row in conn.execute("PRAGMA table_info(web_sessions)")}
+        if "display_name" not in session_columns:
+            conn.execute("ALTER TABLE web_sessions ADD COLUMN display_name TEXT NOT NULL DEFAULT ''")
