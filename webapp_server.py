@@ -24,6 +24,7 @@ SHARED = {}
 
 DB_PATH = "/data/questions.db"
 _REQUEST_DB_PATH = contextvars.ContextVar("webapp_db_path", default=DB_PATH)
+_REQUEST_WEB_IDENTITY = contextvars.ContextVar("webapp_identity", default=None)
 WEB_SETTINGS_KEY = web.AppKey("web_settings", object)
 
 
@@ -39,6 +40,15 @@ def _run_in_executor(loop, function):
 
 def get_user_id(request):
     """Extract and validate Telegram user from initData."""
+    identity = _REQUEST_WEB_IDENTITY.get()
+    if request.app.get(WEB_SETTINGS_KEY) is not None:
+        if not identity:
+            return None, None
+        if identity.provider == "telegram":
+            user_id = int(identity.account_key)
+        else:
+            user_id = identity.account_key
+        return user_id, {"id": user_id, "first_name": identity.display_name}
     init_data = request.headers.get("Authorization", "")
     user = validate_init_data(init_data, _legacy_api_token())
     if not user:
@@ -84,11 +94,19 @@ def db_get_questions_excluding(subject, exclude_ids, limit=1):
 def db_get_recent_ids(user_id, subject, limit=100):
     conn = _db_conn()
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT question_id FROM question_history "
-        "WHERE user_id=? AND subject=? ORDER BY asked_at DESC LIMIT ?",
-        (user_id, subject.lower(), limit)
-    )
+    identity = _REQUEST_WEB_IDENTITY.get()
+    if identity and identity.provider == "google":
+        cursor.execute(
+            "SELECT question_id FROM web_google_history WHERE google_subject=? AND subject=? "
+            "ORDER BY asked_at DESC LIMIT ?",
+            (identity.account_key, subject.lower(), limit),
+        )
+    else:
+        cursor.execute(
+            "SELECT question_id FROM question_history "
+            "WHERE user_id=? AND subject=? ORDER BY asked_at DESC LIMIT ?",
+            (user_id, subject.lower(), limit)
+        )
     ids = [r[0] for r in cursor.fetchall()]
     conn.close()
     return ids
@@ -97,10 +115,17 @@ def db_get_recent_ids(user_id, subject, limit=100):
 def db_save_history(user_id, subject, question_id):
     conn = _db_conn()
     cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO question_history (user_id, subject, question_id) VALUES (?, ?, ?)",
-        (user_id, subject.lower(), question_id)
-    )
+    identity = _REQUEST_WEB_IDENTITY.get()
+    if identity and identity.provider == "google":
+        cursor.execute(
+            "INSERT INTO web_google_history (google_subject, subject, question_id) VALUES (?, ?, ?)",
+            (identity.account_key, subject.lower(), question_id),
+        )
+    else:
+        cursor.execute(
+            "INSERT INTO question_history (user_id, subject, question_id) VALUES (?, ?, ?)",
+            (user_id, subject.lower(), question_id)
+        )
     conn.commit()
     conn.close()
 
@@ -108,10 +133,17 @@ def db_save_history(user_id, subject, question_id):
 def db_save_history_batch(user_id, subject, question_ids):
     conn = _db_conn()
     cursor = conn.cursor()
-    cursor.executemany(
-        "INSERT INTO question_history (user_id, subject, question_id) VALUES (?, ?, ?)",
-        [(user_id, subject.lower(), qid) for qid in question_ids]
-    )
+    identity = _REQUEST_WEB_IDENTITY.get()
+    if identity and identity.provider == "google":
+        cursor.executemany(
+            "INSERT INTO web_google_history (google_subject, subject, question_id) VALUES (?, ?, ?)",
+            [(identity.account_key, subject.lower(), qid) for qid in question_ids],
+        )
+    else:
+        cursor.executemany(
+            "INSERT INTO question_history (user_id, subject, question_id) VALUES (?, ?, ?)",
+            [(user_id, subject.lower(), qid) for qid in question_ids]
+        )
     conn.commit()
     conn.close()
 
@@ -145,10 +177,19 @@ def _save_session(user_id, session_type, data):
         if isinstance(obj, datetime):
             return obj.isoformat()
         raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
-    c.execute(
-        "INSERT OR REPLACE INTO sessions (user_id, session_type, data, updated_at) VALUES (?, ?, ?, ?)",
-        (user_id, session_type, _json.dumps(data, default=serialize), datetime.now().isoformat())
-    )
+    serialized = _json.dumps(data, default=serialize)
+    identity = _REQUEST_WEB_IDENTITY.get()
+    if identity and identity.provider == "google":
+        c.execute(
+            "INSERT OR REPLACE INTO web_google_learning_sessions "
+            "(google_subject, session_type, data, updated_at) VALUES (?, ?, ?, ?)",
+            (identity.account_key, session_type, serialized, datetime.now().isoformat()),
+        )
+    else:
+        c.execute(
+            "INSERT OR REPLACE INTO sessions (user_id, session_type, data, updated_at) VALUES (?, ?, ?, ?)",
+            (user_id, session_type, serialized, datetime.now().isoformat()),
+        )
     conn.commit()
     conn.close()
 
@@ -156,7 +197,14 @@ def _load_session(user_id, session_type):
     """Загружает сессию из SQLite. Возвращает dict или None."""
     conn = _db_conn()
     c = conn.cursor()
-    c.execute("SELECT data FROM sessions WHERE user_id=? AND session_type=?", (user_id, session_type))
+    identity = _REQUEST_WEB_IDENTITY.get()
+    if identity and identity.provider == "google":
+        c.execute(
+            "SELECT data FROM web_google_learning_sessions WHERE google_subject=? AND session_type=?",
+            (identity.account_key, session_type),
+        )
+    else:
+        c.execute("SELECT data FROM sessions WHERE user_id=? AND session_type=?", (user_id, session_type))
     row = c.fetchone()
     conn.close()
     if not row:
@@ -174,17 +222,31 @@ def _delete_session(user_id, session_type):
     """Удаляет сессию из SQLite."""
     conn = _db_conn()
     c = conn.cursor()
-    c.execute("DELETE FROM sessions WHERE user_id=? AND session_type=?", (user_id, session_type))
+    identity = _REQUEST_WEB_IDENTITY.get()
+    if identity and identity.provider == "google":
+        c.execute(
+            "DELETE FROM web_google_learning_sessions WHERE google_subject=? AND session_type=?",
+            (identity.account_key, session_type),
+        )
+    else:
+        c.execute("DELETE FROM sessions WHERE user_id=? AND session_type=?", (user_id, session_type))
     conn.commit()
     conn.close()
 
 def _has_access(user_id, subject):
     conn = _db_conn()
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT expires_at FROM purchases WHERE user_id=? AND subject=?",
-        (user_id, subject.lower())
-    )
+    identity = _REQUEST_WEB_IDENTITY.get()
+    if identity and identity.provider == "google":
+        cursor.execute(
+            "SELECT expires_at FROM web_google_access_grants WHERE google_subject=? AND subject=?",
+            (identity.account_key, subject.lower()),
+        )
+    else:
+        cursor.execute(
+            "SELECT expires_at FROM purchases WHERE user_id=? AND subject=?",
+            (user_id, subject.lower())
+        )
     row = cursor.fetchone()
     conn.close()
     if row is None:
@@ -214,8 +276,16 @@ def _load_purchases():
 def _load_trials():
     conn = _db_conn()
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, subject, count FROM trials")
-    rows = cursor.fetchall()
+    identity = _REQUEST_WEB_IDENTITY.get()
+    if identity and identity.provider == "google":
+        cursor.execute(
+            "SELECT subject, count FROM web_google_trials WHERE google_subject=?",
+            (identity.account_key,),
+        )
+        rows = [(identity.account_key, subject, count) for subject, count in cursor.fetchall()]
+    else:
+        cursor.execute("SELECT user_id, subject, count FROM trials")
+        rows = cursor.fetchall()
     conn.close()
     result = {}
     for uid, subj, count in rows:
@@ -227,12 +297,20 @@ def _load_trials():
 def _save_trials(data):
     conn = _db_conn()
     cursor = conn.cursor()
+    identity = _REQUEST_WEB_IDENTITY.get()
     for user_id, subjects in data.items():
         for subject, count in subjects.items():
-            cursor.execute(
-                "INSERT OR REPLACE INTO trials (user_id, subject, count) VALUES (?, ?, ?)",
-                (user_id, subject.lower(), count)
-            )
+            if identity and identity.provider == "google":
+                cursor.execute(
+                    "INSERT INTO web_google_trials(google_subject, subject, count) VALUES (?, ?, ?) "
+                    "ON CONFLICT(google_subject, subject) DO UPDATE SET count=excluded.count",
+                    (identity.account_key, subject.lower(), count),
+                )
+            else:
+                cursor.execute(
+                    "INSERT OR REPLACE INTO trials (user_id, subject, count) VALUES (?, ?, ?)",
+                    (user_id, subject.lower(), count)
+                )
     conn.commit()
     conn.close()
 
@@ -562,7 +640,10 @@ async def handle_test_answer(request):
     subject = session["subject"]
     data = await request.json()
     selected = data.get("selected")
-    question_id = data.get("question_id")
+    if request.app.get(WEB_SETTINGS_KEY):
+        question_id = session["question"][0]
+    else:
+        question_id = data.get("question_id")
 
     row = await asyncio.to_thread(db_get_correct, question_id)
     if not row:
@@ -1151,11 +1232,20 @@ async def ngrok_middleware(request, handler):
 
 @web.middleware
 async def request_database_middleware(request, handler):
-    token = _REQUEST_DB_PATH.set(request.app.get("db_path", DB_PATH))
+    db_token = _REQUEST_DB_PATH.set(request.app.get("db_path", DB_PATH))
+    identity_token = _REQUEST_WEB_IDENTITY.set(None)
     try:
+        settings = request.app.get(WEB_SETTINGS_KEY)
+        if settings:
+            identity = resolve_session(
+                settings.db_path, request.cookies.get("ameba_session", ""),
+                settings.session_secret, now=int(time.time()), admin_ids=settings.admin_ids,
+            )
+            _REQUEST_WEB_IDENTITY.set(identity)
         return await handler(request)
     finally:
-        _REQUEST_DB_PATH.reset(token)
+        _REQUEST_WEB_IDENTITY.reset(identity_token)
+        _REQUEST_DB_PATH.reset(db_token)
 
 
 @web.middleware
@@ -1295,12 +1385,43 @@ async def handle_web_session_logout(request):
     return response
 
 
+def _web_learning_config(identity):
+    from webapp_catalog import FACULTIES
+
+    faculties = {}
+    access = {}
+    trial_info = {}
+    trials = _load_trials()
+    user_id = int(identity.account_key) if identity.provider == "telegram" else identity.account_key
+    for faculty_key, faculty in FACULTIES.items():
+        subjects_by_course = {}
+        for course, subjects in faculty["subjects"].items():
+            subjects_by_course[str(course)] = subjects
+            for subject in subjects:
+                key = subject["key"]
+                access[key] = _has_access(user_id, key)
+                trial_info[key] = trials.get(user_id, {}).get(key, 0)
+        faculties[faculty_key] = {
+            "name": faculty["name"], "courses": faculty["courses"], "subjects": subjects_by_course,
+        }
+    return {
+        "faculties": faculties,
+        "access": access,
+        "trials": trial_info,
+        "user": {"id": user_id, "first_name": identity.display_name},
+    }
+
+
 async def handle_web_public_config(request):
     settings = request.app[WEB_SETTINGS_KEY]
-    response = json_response({
+    config = {
         "google_client_id": settings.google_client_id,
         "telegram_bot_username": settings.telegram_login_bot_username,
-    })
+    }
+    identity = _REQUEST_WEB_IDENTITY.get()
+    if identity:
+        config.update(_web_learning_config(identity))
+    response = json_response(config)
     response.set_cookie(
         "g_csrf_token", secrets.token_urlsafe(32), max_age=300,
         httponly=False, secure=request.secure or settings.environment == "staging",
@@ -1368,4 +1489,14 @@ def create_web_app(settings):
     app.router.add_post("/api/session/google", handle_google_session_login)
     app.router.add_get("/api/session", handle_web_session)
     app.router.add_post("/api/session/logout", handle_web_session_logout)
+    app.router.add_get("/api/access", handle_access)
+    app.router.add_post("/api/exam/start", handle_exam_start)
+    app.router.add_get("/api/exam/question", handle_exam_question)
+    app.router.add_post("/api/exam/answer", handle_exam_answer)
+    app.router.add_post("/api/exam/finish", handle_exam_finish)
+    app.router.add_get("/api/exam/status", handle_exam_status)
+    app.router.add_post("/api/test/start", handle_test_start)
+    app.router.add_post("/api/test/answer", handle_test_answer)
+    app.router.add_get("/api/test/next", handle_test_next)
+    app.router.add_get("/api/review", handle_review)
     return app

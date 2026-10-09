@@ -323,7 +323,7 @@ async function renderModes(facKey, courseNum, subject) {
     // Purchase — всегда показываем если нет доступа
     if (!hasAccess) {
         html += `<button class="btn btn-primary" onclick="navigate('purchase/${subject}')">
-            💳 Купить доступ
+            Как получить полный доступ
         </button>`;
     }
 
@@ -650,65 +650,9 @@ async function loadNextTestQuestion() {
 
 // --- Purchase ---
 async function renderPurchase(subject) {
-    let html = `<div class="header"><h1>💳 Покупка доступа</h1><p>${subject}</p></div>`;
-    html += '<div class="btn-list">';
-
-    const prices = [
-        { period: 'forever', label: 'Навсегда', price: '300с' },
-    ];
-
-    for (const p of prices) {
-        html += `<button class="btn" onclick="selectPurchase('${subject}', '${p.period}')">
-            ${p.label} <span class="price-tag">${p.price}</span>
-        </button>`;
-    }
-    html += '</div>';
-
-    html += '<div class="info-box info" style="margin-top:16px">';
-    html += '📎 После оплаты отправьте квитанцию администратору бота @Ameba_admin или через поддержку.';
-    html += '</div>';
-    html += `<div style="margin-top:8px"><button class="btn" onclick="navigate('support')">📩 Отправить квитанцию</button></div>`;
-    app.innerHTML = html;
-}
-
-async function selectPurchase(subject, period) {
-    const btn = event && event.target;
-    if (btn) { btn.disabled = true; btn.textContent = 'Загрузка...'; }
-    let res;
-    try {
-        res = await api('POST', '/api/purchase/select', { subject, period });
-    } catch (e) {
-        app.innerHTML = `<div class="info-box warning">Ошибка соединения. Попробуйте позже.</div>
-            <button class="btn" onclick="navigate('purchase/${subject}')">🔄 Повторить</button>`;
-        return;
-    }
-    if (res.error) {
-        app.innerHTML = `<div class="info-box warning">${res.error}</div>
-            <button class="btn" onclick="navigate('purchase/${subject}')">🔄 Повторить</button>`;
-        return;
-    }
-    if (res.success) {
-        let qrHtml = "";
-        if (res.qr_url) {
-            qrHtml = `<img src="${res.qr_url}" style="width: 100%; border-radius: 8px; margin: 10px 0;">`;
-        }
-        
-        app.innerHTML = `
-            <div class="info-box success">
-                ✅ Инструкция по оплате и QR-код готовы!
-            </div>
-            <div class="question-card" style="text-align: center;">
-                <p>Отсканируйте QR-код для оплаты:</p>
-                ${qrHtml}
-                <br>
-                <p>• Сохраните фото или оплатите сейчас</p>
-                <p>• Затем закройте приложение и отправьте чек прямо боту!</p>
-                <p>Обязательно нажмите "Я оплатил" в чате с ботом.</p>
-            </div>
-            <div class="btn-list">
-                <button class="btn btn-primary" onclick="navigate('')">Вернуться в меню</button>
-            </div>`;
-    }
+    app.innerHTML = `<div class="header"><h1>Доступ к предмету</h1><p>${subject}</p></div>
+        <div class="info-box info">Оплата на сайте пока не подключена. Если вы уже покупали доступ в боте, войдите через Telegram. Для нового доступа обратитесь к администратору.</div>
+        <div class="btn-list"><button class="btn" onclick="navigate('')">Вернуться в меню</button></div>`;
 }
 
 // --- Support ---

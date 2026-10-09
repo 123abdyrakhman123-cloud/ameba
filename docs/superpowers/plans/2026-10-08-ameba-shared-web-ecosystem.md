@@ -130,7 +130,7 @@
 **Files:**
 - Modify: `webapp_server.py`
 - Modify: `webapp_schema.py`
-- Modify: `static/app.js`
+- Modify: `web_static/app.js`
 - Test: `tests/test_web_learning_api.py`
 
 **Interfaces:**
