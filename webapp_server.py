@@ -1630,7 +1630,7 @@ async def request_database_middleware(request, handler):
         settings = request.app.get(WEB_SETTINGS_KEY)
         if settings:
             identity = resolve_session(
-                settings.db_path, request.cookies.get("ameba_session", ""),
+                settings.db_path, _session_token(request),
                 settings.session_secret, now=int(time.time()), admin_ids=settings.admin_ids,
             )
             _REQUEST_WEB_IDENTITY.set(identity)
@@ -1689,7 +1689,11 @@ def _require_same_origin(request):
 
 
 def _session_token(request):
-    return request.cookies.get("ameba_session", "")
+    for item in request.headers.get("Cookie", "").split(";"):
+        name, separator, value = item.strip().partition("=")
+        if separator and name == "ameba_session":
+            return value.strip().strip('"')
+    return ""
 
 
 def _set_session_cookie(response, request, settings, token):

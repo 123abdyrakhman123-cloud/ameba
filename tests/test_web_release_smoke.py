@@ -2,6 +2,7 @@ import sqlite3
 import tempfile
 import tomllib
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from aiohttp.test_utils import TestClient, TestServer
@@ -139,6 +140,79 @@ class WebReleaseSmokeTests(unittest.IsolatedAsyncioTestCase):
             self.assertGreaterEqual(conn.execute("SELECT COUNT(*) FROM question_history WHERE user_id=900000001").fetchone()[0], 1)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM web_google_history WHERE google_subject='staging-google'").fetchone()[0], 1)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM question_history WHERE user_id=0").fetchone()[0], 0)
+
+    async def test_local_demo_learning_flow_is_durable_and_stays_out_of_telegram_tables(self):
+        await self.client.close()
+        settings = replace(self.settings, environment="local", demo_login_enabled=True)
+        from webapp_server import create_web_app
+        self.client = TestClient(TestServer(create_web_app(settings)))
+        await self.client.start_server()
+
+        response = await self.client.post("/api/session/demo", json={})
+        self.assertEqual(response.status, 200)
+        demo_cookie = response.cookies["ameba_session"].value
+        cookies = {"ameba_session": demo_cookie}
+
+        session_response = await self.client.get("/api/session", cookies=cookies)
+        identity = await session_response.json()
+        self.assertTrue(identity["is_demo"])
+        self.assertFalse(identity["is_admin"])
+        dashboard_response = await self.client.get("/api/dashboard", cookies=cookies)
+        self.assertEqual(dashboard_response.status, 200)
+
+        response = await self.client.post(
+            "/api/exam/start", json={"subject": "histology"}, cookies=cookies,
+        )
+        self.assertEqual(response.status, 200)
+        question_response = await self.client.get("/api/exam/question", cookies=cookies)
+        question = (await question_response.json())["question"]
+        response = await self.client.post(
+            "/api/exam/answer", json={"index": 0, "selected": 1}, cookies=cookies,
+        )
+        self.assertEqual(response.status, 200)
+        response = await self.client.post(
+            "/api/exam/navigate", json={"index": 0}, cookies=cookies,
+        )
+        self.assertEqual((await response.json())["selected_option"], 1)
+        finish_response = await self.client.post("/api/exam/finish", cookies=cookies)
+        self.assertEqual(finish_response.status, 200)
+        result_id = (await finish_response.json())["result_id"]
+        result_response = await self.client.get(
+            f"/api/exam/results/{result_id}", cookies=cookies,
+        )
+        result = await result_response.json()
+        self.assertEqual(result["answered"], 1)
+        self.assertEqual(result["answers"][0]["question_id"], question["id"])
+        progress_response = await self.client.get("/api/progress", cookies=cookies)
+        self.assertEqual((await progress_response.json())["summary"]["exam_count"], 1)
+
+        cards_response = await self.client.get(
+            "/api/flashcards?subject=histology", cookies=cookies,
+        )
+        cards = (await cards_response.json())["cards"]
+        self.assertTrue(cards)
+        question_id = cards[0]["question_id"]
+        reveal_response = await self.client.get(
+            f"/api/flashcards/{question_id}/reveal", cookies=cookies,
+        )
+        self.assertEqual(reveal_response.status, 200)
+        review_response = await self.client.post(
+            f"/api/flashcards/{question_id}/review",
+            json={"state": "known", "review_key": "release-smoke"}, cookies=cookies,
+        )
+        self.assertEqual(review_response.status, 200)
+        profile_response = await self.client.get("/api/profile", cookies=cookies)
+        self.assertTrue((await profile_response.json())["is_demo"])
+
+        response = await self.client.post("/api/session/logout", cookies=cookies)
+        self.assertEqual(response.status, 200)
+        session_after_logout = await self.client.get("/api/session", cookies=cookies)
+        self.assertEqual(session_after_logout.status, 401)
+        with sqlite3.connect(self.db) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0], 2)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM question_history").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM web_exam_results WHERE provider='google' AND account_key='local-demo-account'").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM web_activity_events WHERE provider='google' AND account_key='local-demo-account' AND event_type='flashcard_review'").fetchone()[0], 1)
 
 
 if __name__ == "__main__":

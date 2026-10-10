@@ -139,6 +139,19 @@ class WebSessionApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertIsNone(resolve_session(str(self.db_path), token, self.settings.session_secret, now=9999999999))
 
+    async def test_session_cookie_survives_malformed_google_state_cookie(self):
+        identity = WebIdentity("google", "google-sub-cookie", "Cookie User", False)
+        token = create_session(str(self.db_path), identity, self.settings.session_secret, 3600)
+        headers = {
+            "Cookie": f'g_state={{"i_l":0,"i_e":{{"enable_itp_optimization":24}}}}; ameba_session={token}'
+        }
+        response = await self.client.get("/api/session", headers=headers)
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await response.json())["account_key"], "google-sub-cookie")
+        response = await self.client.get("/api/profile", headers=headers)
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await response.json())["display_name"], "Cookie User")
+
     async def test_web_config_exposes_only_public_google_client_id(self):
         response = await self.client.get("/api/config")
         self.assertEqual(response.status, 200)
