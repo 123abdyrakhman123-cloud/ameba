@@ -40,6 +40,36 @@ class BrowserClientContractTests(unittest.TestCase):
         self.assertIn("data.questions", client)
         self.assertIn("item.snippet", client)
 
+    def test_exam_screen_supports_previous_next_and_restores_selected_answer(self):
+        client = (ROOT / "web_static/app.js").read_text()
+        self.assertIn("/api/exam/navigate", client)
+        self.assertIn("selected_option", client)
+        self.assertIn("function navigateExamQuestion", client)
+
+    def test_exam_results_load_durably_and_render_answer_review(self):
+        client = (ROOT / "web_static/app.js").read_text()
+        self.assertIn("/api/exam/results/${resultId}", client)
+        self.assertIn("result.answers", client)
+        self.assertIn("elapsed_seconds", client)
+
+    def test_progress_and_rating_have_real_empty_and_opt_in_states(self):
+        client = (ROOT / "web_static/app.js").read_text()
+        self.assertIn("async function renderProgress()", client)
+        self.assertIn("async function renderRating()", client)
+        self.assertIn("/api/leaderboard/visibility", client)
+        self.assertIn("Включить участие", client)
+
+    def test_flashcards_reveal_before_saving_review_state(self):
+        client = (ROOT / "web_static/app.js").read_text()
+        self.assertIn("/api/flashcards/${questionId}/reveal", client)
+        self.assertIn("/api/flashcards/${card.question_id}/review", client)
+        self.assertIn("Показать ответ", client)
+
+    def test_profile_can_revoke_the_current_session(self):
+        client = (ROOT / "web_static/app.js").read_text()
+        self.assertIn("async function renderProfile()", client)
+        self.assertIn("/api/session/logout", client)
+
     def test_client_uses_cookie_sessions_and_browser_history_not_mini_app_auth(self):
         client = (ROOT / "web_static/app.js").read_text()
         self.assertIn("/api/session", client)

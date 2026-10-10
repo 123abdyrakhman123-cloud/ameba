@@ -6,6 +6,9 @@ let WEB_CONFIG = null;
 let WEB_SESSION = null;
 let examTimer = null;    // setInterval ref
 let examTimeLeft = 0;    // seconds remaining
+let examCurrentIndex = 0;
+let examTotal = 0;
+let examCurrentQuestion = null;
 let currentTestQ = null; // current test question data
 let testSubject = null;
 let inviteHandled = false;
@@ -115,7 +118,7 @@ function renderShell(active, content, options = {}) {
                 <a class="workspace-brand" href="#home" onclick="navigate('home'); return false"><span class="brand-amoeba">А</span><span><strong>АМЁБА</strong><small>База знаний</small></span></a>
                 <nav class="side-nav" aria-label="Основная навигация">${desktopNav}</nav>
                 <div class="sidebar-spacer"></div>
-                <a class="side-link side-support" href="#support">${navIcon('profile')}<span>Поддержка</span></a>
+                <a class="side-link side-support" href="#support" onclick="navigate('support'); return false">${navIcon('profile')}<span>Поддержка</span></a>
                 <div class="sidebar-account"><span class="avatar-small">${accountName.slice(0, 1)}</span><span><strong>${accountName}</strong><small>${WEB_SESSION?.is_demo ? 'Демо-режим' : escapeHTML(WEB_SESSION?.provider === 'telegram' ? 'Telegram' : 'Google')}</small></span>${WEB_SESSION?.is_demo ? '<span class="demo-marker">Демо</span>' : ''}</div>
             </aside>
             <div class="workspace-main">
@@ -203,7 +206,7 @@ async function renderDashboard() {
     const picks = [...subjects].sort((a, b) => b.question_count - a.question_count).slice(0, 5);
     const totalAnswered = progress.summary.answered || 0;
     const recentHtml = recent.length ? recent.slice(0, 3).map(item => `
-        <a class="recent-row" href="#progress"><span class="recent-dot"></span><span><strong>${escapeHTML(item.subject)}</strong><small>${item.correct} из ${item.answered} правильных · ${escapeHTML(item.completed_at.slice(0, 10))}</small></span><span class="recent-score">${item.percentage ?? '—'}%</span></a>`).join('') : '<div class="empty-inline"><strong>История пока пустая</strong><span>Завершите первый экзамен, чтобы увидеть результат здесь.</span></div>';
+        <a class="recent-row" href="#exam-result/${item.id}" onclick="navigate('exam-result/${item.id}'); return false"><span class="recent-dot"></span><span><strong>${escapeHTML(item.subject)}</strong><small>${item.correct} из ${item.answered} правильных · ${escapeHTML(item.completed_at.slice(0, 10))}</small></span><span class="recent-score">${item.max_score ? Math.round(item.score * 100 / item.max_score) : 0}%</span></a>`).join('') : '<div class="empty-inline"><strong>История пока пустая</strong><span>Завершите первый экзамен, чтобы увидеть результат здесь.</span></div>';
     const subjectHtml = picks.length ? picks.map((subject, index) => `
         <a class="subject-card" href="#subject/${encodeURIComponent(subject.key)}">${subjectMark(subject, index)}<span class="subject-card-copy"><strong>${escapeHTML(subject.name)}</strong><small>${subject.question_count.toLocaleString('ru-RU')} вопросов</small></span><span class="subject-chevron" aria-hidden="true">›</span></a>`).join('') : '<div class="empty-inline">Вопросы пока не добавлены.</div>';
     const rankText = rating.rank ? `Место ${rating.rank}` : rating.enabled ? 'Рейтинг обновится, когда появятся участники' : 'Включите участие на странице рейтинга';
@@ -258,6 +261,166 @@ async function renderSubjectDetail(subjectKey) {
     renderShell('subjects', content);
 }
 
+async function renderProgress() {
+    app.innerHTML = '<div class="loading">Загружаем прогресс...</div>';
+    const [progress, dashboard] = await Promise.all([api('GET', '/api/progress'), api('GET', '/api/dashboard')]);
+    if (progress.error) throw new Error('Progress unavailable');
+    const summary = progress.summary;
+    const days = progress.activity_by_day.slice(-14);
+    const maxCount = Math.max(1, ...days.map(day => day.count));
+    const activity = days.length ? `<div class="activity-chart" role="img" aria-label="Активность по дням">${days.map(day => `<div class="activity-column"><span class="activity-bar" style="height:${Math.max(5, day.count / maxCount * 100)}%" title="${day.count} действий"></span><small>${day.date.slice(5)}</small></div>`).join('')}</div>` : '<div class="empty-state"><h2>Активность появится здесь</h2><p>Пройдите тест или экзамен, чтобы начать историю занятий.</p><button class="action-primary" onclick="navigate(\'tests\')">Выбрать тест</button></div>';
+    const exams = progress.exams.length ? progress.exams.map(exam => `<a class="exam-history-row" href="#exam-result/${exam.id}" onclick="navigate('exam-result/${exam.id}'); return false"><span class="history-date">${escapeHTML((exam.completed_at || '').slice(0,10))}</span><span class="history-subject"><strong>${escapeHTML(exam.subject)}</strong><small>${exam.correct}/${exam.answered} правильных · ${exam.elapsed_seconds} сек</small></span><strong class="history-percent">${exam.max_score ? Math.round(exam.score * 100 / exam.max_score) : 0}%</strong><span aria-hidden="true">›</span></a>`).join('') : '<div class="empty-inline"><strong>Завершённых экзаменов пока нет</strong><span>Первый результат появится в этой истории.</span></div>';
+    const subjectRows = progress.subjects.length ? progress.subjects.map(subject => {
+        const subjectName = (dashboard.subjects || []).find(item => item.key === subject.key)?.name || subject.key;
+        return `<div class="subject-progress-row"><span><strong>${escapeHTML(subjectName)}</strong><small>${subject.exam_count} экзаменов · ${subject.answered} ответов</small></span><span class="subject-accuracy">${formatAccuracy(subject.accuracy_percent)}</span></div>`;
+    }).join('') : '<div class="empty-inline">Данные по предметам появятся после первого завершённого экзамена.</div>';
+    const content = `<section class="page-intro"><p class="eyebrow">ВАША СТАТИСТИКА</p><h1>Прогресс</h1><p>Результаты завершённых веб-экзаменов и сохранённая активность.</p></section><section class="progress-kpis"><div><small>Экзаменов</small><strong>${summary.exam_count}</strong></div><div><small>Ответов</small><strong>${summary.answered}</strong></div><div><small>Правильных</small><strong>${summary.correct}</strong></div><div><small>Точность</small><strong>${formatAccuracy(summary.accuracy_percent)}</strong></div><div><small>Серия</small><strong>${dashboard.activity.streak_days} дн.</strong></div></section><section class="dashboard-section"><div class="section-heading"><div><p class="eyebrow">ПО ДНЯМ</p><h2>Активность</h2></div><span class="result-muted">UTC</span></div><div class="activity-panel">${activity}</div></section><section class="dashboard-section"><div class="section-heading"><div><p class="eyebrow">ИСТОРИЯ</p><h2>Экзамены</h2></div></div><div class="exam-history-list">${exams}</div></section><section class="dashboard-section"><div class="section-heading"><div><p class="eyebrow">СРАВНЕНИЕ</p><h2>По предметам</h2></div></div><div class="subject-progress-list">${subjectRows}</div></section>`;
+    renderShell('progress', content);
+}
+
+async function renderRating() {
+    app.innerHTML = '<div class="loading">Загружаем рейтинг...</div>';
+    const data = await api('GET', '/api/leaderboard');
+    if (data.error) throw new Error('Leaderboard unavailable');
+    const rows = (data.entries || []).map(entry => `<div class="leaderboard-row ${entry.display_name === data.display_name && data.enabled ? 'leaderboard-self' : ''}"><span class="leaderboard-rank">${entry.rank}</span><strong>${escapeHTML(entry.display_name)}</strong><span>${entry.points.toLocaleString('ru-RU')} баллов</span></div>`).join('');
+    const demo = WEB_SESSION?.is_demo;
+    const content = `<section class="page-intro"><p class="eyebrow">УЧАСТНИКИ</p><h1>Рейтинг</h1><p>Показываются только пользователи, которые сами включили участие и выбрали псевдоним.</p></section><section class="rating-optin-panel"><div><h2>Участие в рейтинге</h2><p>${demo ? 'Демо-аккаунты не участвуют в рейтинге.' : 'Ваш Telegram ID, username и email другим пользователям не показываются.'}</p></div><label class="rating-name-label" for="leaderboardName">Псевдоним</label><div class="rating-preference-row"><input id="leaderboardName" type="text" maxlength="24" value="${escapeHTML(data.display_name || '')}" placeholder="Например, Руслан"><button class="action-primary" type="button" ${demo ? 'disabled' : ''} onclick="saveLeaderboardPreference()">${data.enabled ? 'Сохранить' : 'Включить участие'}</button></div>${data.enabled ? '<button class="text-button" type="button" onclick="disableLeaderboard()">Скрыть меня из рейтинга</button>' : ''}<p class="form-status" id="leaderboardStatus" role="status"></p></section><section class="dashboard-section"><div class="section-heading"><div><p class="eyebrow">ТОП УЧАСТНИКОВ</p><h2>Таблица рейтинга</h2></div><span class="result-muted">${rows ? `${data.entries.length} участников` : 'Пока пусто'}</span></div><div class="leaderboard-list">${rows || '<div class="empty-state"><h2>Рейтинг пока пустой</h2><p>Он заполнится, когда пользователи добровольно включат участие.</p></div>'}</div></section>`;
+    renderShell('rating', content);
+}
+
+async function saveLeaderboardPreference() {
+    const input = document.getElementById('leaderboardName');
+    const status = document.getElementById('leaderboardStatus');
+    const button = document.querySelector('.rating-preference-row .action-primary');
+    if (!input || !status) return;
+    if (button) button.disabled = true;
+    status.textContent = 'Сохраняем...';
+    try {
+        const result = await api('POST', '/api/leaderboard/visibility', { enabled: true, display_name: input.value });
+        if (result.error) throw new Error(result.error);
+        status.textContent = 'Вы участвуете в рейтинге.';
+        await renderRating();
+    } catch (error) {
+        status.textContent = error.message || 'Не удалось сохранить настройки.';
+        if (button) button.disabled = false;
+    }
+}
+
+async function disableLeaderboard() {
+    const input = document.getElementById('leaderboardName');
+    const status = document.getElementById('leaderboardStatus');
+    const result = await api('POST', '/api/leaderboard/visibility', { enabled: false, display_name: input?.value || '' });
+    if (result.error) {
+        if (status) status.textContent = result.error;
+        return;
+    }
+    await renderRating();
+}
+
+let flashcards = [];
+let flashcardIndex = 0;
+let flashcardSubject = '';
+let flashcardFilter = null;
+let flashcardRevealed = null;
+let flashcardSubjects = [];
+
+async function renderFlashcards(subject, state = null) {
+    app.innerHTML = '<div class="loading">Загружаем карточки...</div>';
+    const profile = await api('GET', '/api/profile');
+    const available = (profile.access || []).filter(item => item.active);
+    flashcardSubjects = available;
+    if (!subject) subject = available[0]?.subject;
+    if (!subject) {
+        return renderShell('cards', '<div class="empty-state"><h2>Нет предметов с доступом</h2><p>Карточки доступны для предметов, к которым у вашего аккаунта есть доступ.</p><button class="action-primary" onclick="navigate(\'subjects\')">Открыть предметы</button></div>');
+    }
+    if (!available.some(item => item.subject === subject)) {
+        return renderShell('cards', '<div class="empty-state"><h2>Нет доступа к предмету</h2><p>Выберите предмет, доступный аккаунту.</p><button class="action-secondary" onclick="navigate(\'profile\')">Профиль</button></div>');
+    }
+    const query = new URLSearchParams({ subject });
+    if (state) query.set('state', state);
+    const data = await api('GET', `/api/flashcards?${query}`);
+    if (data.error) throw new Error(data.error);
+    flashcards = data.cards || [];
+    flashcardSubject = subject;
+    flashcardFilter = state;
+    flashcardIndex = 0;
+    flashcardRevealed = null;
+    renderFlashcardPage(available.find(item => item.subject === subject)?.name || subject);
+}
+
+function renderFlashcardPage(subjectName) {
+    const filters = [['all', 'Все'], ['new', 'Новые'], ['repeat', 'Повторить'], ['known', 'Знаю']];
+    const filterHtml = filters.map(([key, label]) => {
+        const active = (key === 'all' && !flashcardFilter) || key === flashcardFilter;
+        const path = key === 'all' ? `cards/${encodeURIComponent(flashcardSubject)}` : `cards/${encodeURIComponent(flashcardSubject)}/${key}`;
+        return `<button class="segmented-button ${active ? 'is-active' : ''}" type="button" onclick="navigate('${path}')">${label}</button>`;
+    }).join('');
+    let cardContent;
+    const card = flashcards[flashcardIndex];
+    if (!card) {
+        cardContent = `<div class="empty-state"><h2>${flashcardFilter === 'new' ? 'Новые карточки закончились' : 'Карточек пока нет'}</h2><p>Выберите другой фильтр или вернитесь к предметам.</p><button class="action-secondary" onclick="navigate('subjects')">Все предметы</button></div>`;
+    } else {
+        cardContent = `<article class="flashcard"><div class="flashcard-meta"><span>${escapeHTML(subjectName)}</span><span>${flashcardIndex + 1} / ${flashcards.length}</span></div><p class="flashcard-question">${escapeHTML(card.question)}</p>${flashcardRevealed ? `<div class="flashcard-answer"><small>ПРАВИЛЬНЫЙ ОТВЕТ</small><strong>${escapeHTML(flashcardRevealed.answer || `Вариант ${flashcardRevealed.correct_option}`)}</strong>${flashcardRevealed.explanation ? `<p>${escapeHTML(flashcardRevealed.explanation)}</p>` : ''}</div><div class="flashcard-actions"><button class="action-secondary" type="button" onclick="saveFlashcardReview('repeat')">Повторить</button><button class="action-primary" type="button" onclick="saveFlashcardReview('known')">Знаю <span aria-hidden="true">→</span></button></div>` : `<button class="action-primary reveal-action" type="button" onclick="revealFlashcard(${card.question_id})">Показать ответ <span aria-hidden="true">↓</span></button>`}</article>`;
+    }
+    const subjectOptions = flashcardSubjects.map(item => `<option value="${escapeHTML(item.subject)}">${escapeHTML(item.name)}</option>`);
+    const content = `<section class="page-intro"><p class="eyebrow">АКТИВНОЕ ПОВТОРЕНИЕ</p><h1>Карточки</h1><p>Вспомните ответ, затем откройте его и отметьте, нужно ли повторение.</p></section><div class="flashcard-toolbar"><label for="flashcardSubject">Предмет</label><select id="flashcardSubject" onchange="navigate('cards/'+this.value)">${subjectOptions.join('')}</select><div class="segmented-control" role="group" aria-label="Фильтр карточек">${filterHtml}</div></div>${cardContent}`;
+    renderShell('cards', content);
+    const select = document.getElementById('flashcardSubject');
+    if (select) select.value = flashcardSubject;
+}
+
+async function revealFlashcard(questionId) {
+    const result = await api('GET', `/api/flashcards/${questionId}/reveal`);
+    if (result.error) return renderShell('cards', `<div class="empty-state"><h2>Не удалось раскрыть ответ</h2><p>${escapeHTML(result.error)}</p></div>`);
+    flashcardRevealed = result;
+    const profile = await api('GET', '/api/profile');
+    const subject = (profile.access || []).find(item => item.subject === flashcardSubject);
+    renderFlashcardPage(subject?.name || flashcardSubject);
+}
+
+async function saveFlashcardReview(state) {
+    const card = flashcards[flashcardIndex];
+    if (!card) return;
+    const reviewKey = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const result = await api('POST', `/api/flashcards/${card.question_id}/review`, { state, review_key: reviewKey });
+    if (result.error) {
+        const current = document.querySelector('.flashcard-actions');
+        if (current) current.insertAdjacentHTML('beforeend', `<p class="form-status">${escapeHTML(result.error)}</p>`);
+        return;
+    }
+    flashcards.splice(flashcardIndex, 1);
+    flashcardRevealed = null;
+    const profile = await api('GET', '/api/profile');
+    const subject = (profile.access || []).find(item => item.subject === flashcardSubject);
+    renderFlashcardPage(subject?.name || flashcardSubject);
+}
+
+async function renderProfile() {
+    app.innerHTML = '<div class="loading">Загружаем профиль...</div>';
+    const profile = await api('GET', '/api/profile');
+    if (profile.error) throw new Error('Profile unavailable');
+    const providerName = profile.provider === 'telegram' ? 'Telegram' : 'Google';
+    const access = profile.access || [];
+    const content = `<section class="page-intro"><p class="eyebrow">АККАУНТ</p><h1>Профиль</h1><p>Данные веб-аккаунта и доступ к предметам.</p></section><section class="profile-panel"><div class="profile-identity"><span class="profile-avatar">${escapeHTML((profile.display_name || 'П').slice(0,1))}</span><div><strong>${escapeHTML(profile.display_name)}</strong><small>${providerName}${profile.is_demo ? ' · Демо-режим' : ''}</small></div>${profile.is_demo ? '<span class="demo-marker">Демо</span>' : ''}</div><div class="profile-info-row"><span>Способ входа</span><strong>${providerName}</strong></div><div class="profile-info-row"><span>Статус</span><strong>${profile.is_demo ? 'Демо-аккаунт' : 'Подключён'}</strong></div></section><section class="dashboard-section"><div class="section-heading"><div><p class="eyebrow">ВАШ ДОСТУП</p><h2>Предметы</h2></div><span class="result-muted">${access.filter(item => item.active).length} доступны</span></div><div class="profile-access-list">${access.length ? access.map(item => `<div class="profile-access-row"><span>${escapeHTML(item.name)}</span><strong class="${item.active ? 'access-active' : 'access-inactive'}">${item.active ? 'Доступен' : 'Нет доступа'}</strong></div>`).join('') : '<div class="empty-inline">Предметы не найдены.</div>'}</div></section><section class="profile-actions"><button class="action-secondary logout-button" type="button" onclick="logoutWebSession()">Выйти из аккаунта</button><p class="form-status" id="profileStatus" role="status"></p></section>`;
+    renderShell('profile', content);
+}
+
+async function logoutWebSession() {
+    const button = document.querySelector('.logout-button');
+    const status = document.getElementById('profileStatus');
+    if (button) button.disabled = true;
+    try {
+        const result = await api('POST', '/api/session/logout', {});
+        if (result.error) throw new Error(result.error);
+        WEB_SESSION = null;
+        CONFIG = null;
+        renderLogin();
+    } catch (error) {
+        if (button) button.disabled = false;
+        if (status) status.textContent = 'Не удалось выйти. Попробуйте снова.';
+    }
+}
+
 async function route() {
     if (!WEB_SESSION) return renderLogin();
     const { path, params } = getRoute();
@@ -281,6 +444,18 @@ async function route() {
                 if (params.length) await renderSubjects(params[0], parseInt(params[1]));
                 else await renderSubjectCatalog();
                 break;
+            case 'progress':
+                await renderProgress();
+                break;
+            case 'rating':
+                await renderRating();
+                break;
+            case 'cards':
+                await renderFlashcards(params[0], params[1]);
+                break;
+            case 'profile':
+                await renderProfile();
+                break;
             case 'subject':
                 await renderSubjectDetail(params[0]);
                 break;
@@ -300,7 +475,7 @@ async function route() {
                 await renderExam(params[0]);
                 break;
             case 'exam-result':
-                await renderExamResult();
+                await renderExamResult(params[0]);
                 break;
             case 'review':
                 await renderReview(parseInt(params[0] || '0'));
@@ -560,17 +735,8 @@ async function renderModes(facKey, courseNum, subject) {
 
 // --- Exam Start Confirmation ---
 async function renderExamStart(subject) {
-    let html = `<div class="header"><h1>📝 Симуляция экзамена</h1><p>${subject}</p></div>`;
-    html += '<div class="question-card">';
-    html += '<p>Вы готовы начать экзамен?</p><br>';
-    html += '<p>• Количество вопросов: <b>50</b></p>';
-    html += '<p>• За правильный ответ: <b>2 балла</b></p>';
-    html += '<p>• Время: <b>1 час 15 минут</b></p>';
-    html += '</div>';
-    html += '<div class="btn-list">';
-    html += `<button class="btn btn-primary" id="startExamBtn" onclick="startExam('${subject}')">✅ Да, начать!</button>`;
-    html += '</div>';
-    app.innerHTML = html;
+    const content = `<section class="page-intro"><a class="back-link" href="#tests" onclick="navigate('tests'); return false">← Тесты</a><p class="eyebrow">ПОЛНОЦЕННЫЙ ЭКЗАМЕН</p><h1>Симуляция экзамена</h1><p>${escapeHTML(subject)} · время и количество вопросов определяются сервером для доступного каталога.</p></section><section class="subject-detail-panel"><div class="detail-status">75 минут · 2 балла за правильный ответ</div><div class="detail-actions"><button class="action-primary" id="startExamBtn" type="button" onclick="startExam('${escapeHTML(subject)}')">Начать экзамен <span aria-hidden="true">→</span></button></div></section>`;
+    renderShell('tests', content);
 }
 
 async function startExam(subject) {
@@ -583,6 +749,7 @@ async function startExam(subject) {
             <button class="btn" onclick="navigate('')">В меню</button>`;
         return;
     }
+    examTotal = res.total_questions;
     navigate('exam/' + subject);
 }
 
@@ -598,26 +765,51 @@ async function loadExamQuestion() {
         await finishExam();
         return;
     }
-
-    examTimeLeft = res.time_remaining;
-    startExamTimer();
-
-    const q = res.question;
-    let html = `<div class="timer-bar">
-        <span class="timer-text" id="timerText">${formatTime(examTimeLeft)}</span>
-        <span class="timer-progress">Вопрос ${res.question_number}/${res.total}</span>
-    </div>`;
-
-    html += '<div class="question-card">';
-    html += `<div class="question-text">${q.text}</div>`;
-    html += '<div class="options-list">';
-    for (let i = 0; i < q.options.length; i++) {
-        html += `<button class="option-btn" onclick="submitExamAnswer(${i + 1}, ${q.id})">
-            <span class="option-number">${i + 1}.</span> ${q.options[i]}
-        </button>`;
+    if (res.error) {
+        renderShell('tests', `<div class="empty-state"><h2>Экзамен не найден</h2><p>${escapeHTML(res.error)}</p><button class="action-secondary" onclick="navigate('tests')">К тестам</button></div>`);
+        return;
     }
-    html += '</div></div>';
-    app.innerHTML = html;
+    examCurrentIndex = res.index ?? Math.max(0, (res.question_number || 1) - 1);
+    examTotal = res.total;
+    examCurrentQuestion = res.question;
+    examTimeLeft = res.time_remaining;
+    renderExamQuestion(res.question, res.selected_option);
+    startExamTimer();
+}
+
+function renderExamQuestion(question, selectedOption) {
+    const progress = examTotal ? Math.round(((examCurrentIndex + 1) / examTotal) * 100) : 0;
+    const options = question.options.map((option, index) => `<button class="exam-option ${selectedOption === index + 1 ? 'is-selected' : ''}" type="button" onclick="selectExamOption(${index + 1})" aria-pressed="${selectedOption === index + 1}"><span class="option-number">${index + 1}</span><span>${escapeHTML(option)}</span><span class="option-check" aria-hidden="true">${selectedOption === index + 1 ? '✓' : ''}</span></button>`).join('');
+    const previousDisabled = examCurrentIndex <= 0;
+    const nextLabel = examCurrentIndex + 1 >= examTotal ? 'Завершить экзамен' : 'Далее';
+    const content = `<div class="exam-workspace"><div class="exam-topline"><a class="back-link" href="#tests" onclick="navigate('tests'); return false">← Выйти</a><div class="exam-timer"><span class="timer-live-dot"></span><strong id="timerText">${formatTime(examTimeLeft)}</strong><small>осталось</small></div></div><div class="exam-progress-label"><span>${escapeHTML(question.subject || 'Экзамен')}</span><strong>Вопрос ${examCurrentIndex + 1} из ${examTotal}</strong></div><div class="exam-progress-track"><span style="width:${progress}%"></span></div><section class="exam-question-panel"><p class="eyebrow">ВОПРОС ${examCurrentIndex + 1}</p><h1>${escapeHTML(question.text)}</h1><div class="exam-options">${options}</div></section><div class="exam-controls"><button class="action-secondary" type="button" ${previousDisabled ? 'disabled' : ''} onclick="navigateExamQuestion(${examCurrentIndex - 1})">← Назад</button><button class="action-primary" type="button" onclick="${examCurrentIndex + 1 >= examTotal ? 'finishExam()' : `navigateExamQuestion(${examCurrentIndex + 1})`}">${nextLabel} <span aria-hidden="true">→</span></button></div></div>`;
+    renderShell('tests', content);
+}
+
+async function selectExamOption(selected) {
+    const result = await api('POST', '/api/exam/answer', { index: examCurrentIndex, selected });
+    if (result.error) {
+        if (result.error === 'Stale question') await loadExamQuestion();
+        else renderShell('tests', `<div class="empty-state"><h2>Не удалось сохранить ответ</h2><p>${escapeHTML(result.error)}</p><button class="action-secondary" onclick="loadExamQuestion()">Повторить</button></div>`);
+        return;
+    }
+    renderExamQuestion(examCurrentQuestion, result.selected_option ?? selected);
+    startExamTimer();
+}
+
+async function navigateExamQuestion(index) {
+    if (index < 0 || index >= examTotal) return;
+    const result = await api('POST', '/api/exam/navigate', { index });
+    if (result.expired) return finishExam();
+    if (result.error) {
+        renderShell('tests', `<div class="empty-state"><h2>Не удалось открыть вопрос</h2><p>${escapeHTML(result.error)}</p><button class="action-secondary" onclick="loadExamQuestion()">Повторить</button></div>`);
+        return;
+    }
+    examCurrentIndex = result.index;
+    examCurrentQuestion = result.question;
+    examTimeLeft = result.time_remaining;
+    renderExamQuestion(result.question, result.selected_option);
+    startExamTimer();
 }
 
 function startExamTimer() {
@@ -651,53 +843,34 @@ function formatTime(sec) {
 }
 
 async function submitExamAnswer(selected, questionId) {
-    // Disable buttons
-    document.querySelectorAll('.option-btn').forEach(b => b.disabled = true);
-
-    const res = await api('POST', '/api/exam/answer', { selected, question_id: questionId });
-    if (res.expired) {
-        await finishExam();
-        return;
-    }
-    if (!res.has_next) {
-        await finishExam();
-        return;
-    }
-    await loadExamQuestion();
+    return selectExamOption(selected);
 }
 
 async function finishExam() {
     if (examTimer) { clearInterval(examTimer); examTimer = null; }
     const res = await api('POST', '/api/exam/finish');
-    // Store result for display
-    window._examResult = res;
-    navigate('exam-result');
+    if (res.error) {
+        renderShell('tests', `<div class="empty-state"><h2>Не удалось завершить экзамен</h2><p>${escapeHTML(res.error)}</p><button class="action-secondary" onclick="loadExamQuestion()">Вернуться к экзамену</button></div>`);
+        return;
+    }
+    navigate(`exam-result/${res.result_id}`);
 }
 
 // --- Exam Result ---
-async function renderExamResult() {
-    const res = window._examResult;
-    if (!res || res.error) {
-        return navigate('');
+async function renderExamResult(resultId) {
+    if (!resultId) return navigate('progress');
+    app.innerHTML = '<div class="loading">Загружаем результат...</div>';
+    const result = await api('GET', `/api/exam/results/${resultId}`);
+    if (result.error) {
+        return renderShell('progress', `<div class="empty-state"><h2>Результат не найден</h2><p>Он недоступен этому аккаунту или был удалён.</p><button class="action-secondary" onclick="navigate('progress')">К прогрессу</button></div>`);
     }
-
-    const emoji = res.percentage >= 70 ? '🎉' : res.percentage >= 50 ? '📊' : '😔';
-
-    let html = '<div class="result-card">';
-    html += `<div style="font-size:40px">${emoji}</div>`;
-    html += res.time_expired ? '<h2>Время истекло!</h2>' : '<h2>Экзамен завершён!</h2>';
-    html += `<div class="result-score">${res.percentage}%</div>`;
-    html += '<div class="result-stats">';
-    html += `Баллы: <span>${res.score}/${res.max_score}</span><br>`;
-    html += `Отвечено: <span>${res.answered}/${res.total}</span><br>`;
-    html += `✅ Правильных: <span>${res.correct}</span>  ❌ Ошибок: <span>${res.errors}</span>`;
-    html += '</div></div>';
-
-    html += '<div class="btn-list">';
-    html += `<button class="btn btn-primary" onclick="navigate('review/0')">📝 Работа над ошибками</button>`;
-    html += `<button class="btn" onclick="navigate('')">🏠 В меню</button>`;
-    html += '</div>';
-    app.innerHTML = html;
+    const reviewRows = (result.answers || []).map((answer, index) => {
+        const selected = answer.selected_option ? answer.options[answer.selected_option - 1] : 'Нет ответа';
+        const correct = answer.options[answer.correct_option - 1] || 'Правильный ответ не указан';
+        return `<article class="answer-review-row ${answer.is_correct ? 'answer-correct' : 'answer-wrong'}"><div class="answer-review-head"><span>Вопрос ${index + 1}</span><strong>${answer.is_correct ? 'Верно' : 'Ошибка'}</strong></div><p class="answer-review-question">${escapeHTML(answer.question_text)}</p><div class="answer-review-values"><span>Ваш ответ: <strong>${escapeHTML(selected)}</strong></span><span>Правильный: <strong>${escapeHTML(correct)}</strong></span></div>${answer.explanation ? `<p class="answer-explanation">${escapeHTML(answer.explanation)}</p>` : ''}</article>`;
+    }).join('');
+    const content = `<section class="page-intro"><p class="eyebrow">РЕЗУЛЬТАТ</p><h1>Экзамен завершён</h1><p>${escapeHTML(result.subject)} · ${result.time_expired ? 'время истекло' : `${Math.floor(result.elapsed_seconds / 60)} мин ${result.elapsed_seconds % 60} сек`}</p></section><section class="result-summary-panel"><div class="result-accuracy" style="--result-score:${result.percentage}%"><span>${result.percentage}%</span></div><div class="result-metrics"><div><strong>${result.score}/${result.max_score}</strong><small>баллы</small></div><div><strong>${result.correct}</strong><small>правильно</small></div><div><strong>${result.errors}</strong><small>ошибки</small></div><div><strong>${result.answered}/${result.total}</strong><small>отвечено</small></div></div></section><section class="dashboard-section"><div class="section-heading"><div><p class="eyebrow">РАЗБОР</p><h2>Ответы по вопросам</h2></div><span class="result-muted">${result.answers.length} ответов</span></div><div class="answer-review-list">${reviewRows || '<div class="empty-state"><h2>Ответов нет</h2><p>Экзамен завершён без сохранённых ответов.</p></div>'}</div></section><div class="detail-actions"><button class="action-primary" onclick="navigate('tests')">Новый тест <span aria-hidden="true">→</span></button><button class="action-secondary" onclick="navigate('progress')">Мой прогресс</button></div>`;
+    renderShell('progress', content);
 }
 
 // --- Review ---
