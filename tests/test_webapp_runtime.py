@@ -87,7 +87,7 @@ class WebRuntimeTests(unittest.IsolatedAsyncioTestCase):
             async with TestClient(TestServer(app)) as client:
                 response = await client.get("/")
                 self.assertEqual(response.status, 200)
-                self.assertIn("/static/app.js?v=2", await response.text())
+                self.assertIn("/static/app.js?v=3", await response.text())
                 self.assertTrue(db_path.exists())
                 response = await client.get("/static/app.js")
                 self.assertEqual(response.status, 200)

@@ -24,6 +24,22 @@ class BrowserClientContractTests(unittest.TestCase):
         self.assertIn('class="demo-marker"', client)
         self.assertIn("Демо", client)
 
+    def test_learning_shell_has_working_home_tests_and_subject_destinations(self):
+        client = (ROOT / "web_static/app.js").read_text()
+        self.assertIn("async function renderDashboard()", client)
+        self.assertIn("async function renderTests(filter = '')", client)
+        self.assertIn("async function renderSubjectCatalog()", client)
+        self.assertIn("['home', 'Главная', 'home']", client)
+        self.assertIn("['tests', 'Тесты', 'tests']", client)
+        self.assertIn("['subjects', 'Предметы', 'subjects']", client)
+        self.assertIn("api('GET', '/api/dashboard')", client)
+
+    def test_search_renders_only_question_snippets_and_never_answers(self):
+        client = (ROOT / "web_static/app.js").read_text()
+        self.assertIn("/api/search?q=", client)
+        self.assertIn("data.questions", client)
+        self.assertIn("item.snippet", client)
+
     def test_client_uses_cookie_sessions_and_browser_history_not_mini_app_auth(self):
         client = (ROOT / "web_static/app.js").read_text()
         self.assertIn("/api/session", client)

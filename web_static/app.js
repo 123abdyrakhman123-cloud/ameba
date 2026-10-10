@@ -80,6 +80,184 @@ function getRoute() {
 
 window.addEventListener('popstate', route);
 
+const NAV_ITEMS = [
+    ['home', 'Главная', 'home'], ['tests', 'Тесты', 'tests'], ['subjects', 'Предметы', 'subjects'],
+    ['progress', 'Прогресс', 'progress'], ['rating', 'Рейтинг', 'rating'],
+    ['cards', 'Карточки', 'cards'], ['profile', 'Профиль', 'profile'],
+];
+let searchVersion = 0;
+
+function navIcon(name) {
+    const paths = {
+        home: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>',
+        tests: '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/>',
+        subjects: '<path d="m12 3 9 5-9 5-9-5zM3 12l9 5 9-5M3 16l9 5 9-5"/>',
+        progress: '<path d="M4 19V5M4 19h17M8 16v-4M13 16V8M18 16V4"/>',
+        rating: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3l-5.6 2.9 1.1-6.2L3 9.6l6.2-.9z"/>',
+        cards: '<rect x="4" y="5" width="13" height="15" rx="2"/><path d="M8 3h11a2 2 0 0 1 2 2v12M8 10h5M8 14h5"/>',
+        profile: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+    };
+    return `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths[name] || paths.home}</svg>`;
+}
+
+function renderShell(active, content, options = {}) {
+    const desktopNav = NAV_ITEMS.map(([key, label, icon]) =>
+        `<a class="side-link ${active === key ? 'is-active' : ''}" href="#${key}" onclick="navigate('${key}'); return false" ${active === key ? 'aria-current="page"' : ''}>${navIcon(icon)}<span>${label}</span></a>`
+    ).join('');
+    const mobileNav = ['home', 'tests', 'subjects', 'profile'].map(key => {
+        const item = NAV_ITEMS.find(entry => entry[0] === key);
+        return `<a class="mobile-link ${active === key ? 'is-active' : ''}" href="#${item[0]}" onclick="navigate('${item[0]}'); return false" aria-label="${item[1]}">${navIcon(item[2])}<span>${item[1]}</span></a>`;
+    }).join('');
+    const accountName = escapeHTML(WEB_SESSION?.display_name || 'Пользователь');
+    app.innerHTML = `
+        <div class="workspace-shell">
+            <aside class="workspace-sidebar">
+                <a class="workspace-brand" href="#home" onclick="navigate('home'); return false"><span class="brand-amoeba">А</span><span><strong>АМЁБА</strong><small>База знаний</small></span></a>
+                <nav class="side-nav" aria-label="Основная навигация">${desktopNav}</nav>
+                <div class="sidebar-spacer"></div>
+                <a class="side-link side-support" href="#support">${navIcon('profile')}<span>Поддержка</span></a>
+                <div class="sidebar-account"><span class="avatar-small">${accountName.slice(0, 1)}</span><span><strong>${accountName}</strong><small>${WEB_SESSION?.is_demo ? 'Демо-режим' : escapeHTML(WEB_SESSION?.provider === 'telegram' ? 'Telegram' : 'Google')}</small></span>${WEB_SESSION?.is_demo ? '<span class="demo-marker">Демо</span>' : ''}</div>
+            </aside>
+            <div class="workspace-main">
+                <header class="workspace-topbar">
+                    <form class="global-search" id="globalSearchForm" role="search">
+                        <span class="search-symbol" aria-hidden="true">⌕</span>
+                        <input id="globalSearch" type="search" autocomplete="off" placeholder="Поиск по предметам, темам, вопросам..." aria-label="Поиск по предметам и вопросам">
+                        <button type="button" class="search-clear" id="searchClear" aria-label="Очистить поиск" title="Очистить поиск">×</button>
+                        <div class="search-results" id="searchResults" hidden></div>
+                    </form>
+                    <div class="topbar-account"><span class="avatar-small">${accountName.slice(0, 1)}</span><span><strong>${accountName}</strong><small>${WEB_SESSION?.is_demo ? 'Демо' : 'Аккаунт'}</small></span>${WEB_SESSION?.is_demo ? '<span class="demo-marker">Демо</span>' : ''}</div>
+                </header>
+                <main class="workspace-content">${content}</main>
+                ${options.rail || ''}
+            </div>
+            <nav class="mobile-nav" aria-label="Мобильная навигация">${mobileNav}</nav>
+        </div>`;
+    bindGlobalSearch();
+}
+
+function bindGlobalSearch() {
+    const form = document.getElementById('globalSearchForm');
+    const input = document.getElementById('globalSearch');
+    const clear = document.getElementById('searchClear');
+    if (!form || !input) return;
+    let debounce;
+    form.addEventListener('submit', event => event.preventDefault());
+    input.addEventListener('input', () => {
+        clearTimeout(debounce);
+        const query = input.value.trim();
+        clear.hidden = !query;
+        if (query.length < 2) {
+            document.getElementById('searchResults').hidden = true;
+            return;
+        }
+        debounce = setTimeout(() => loadGlobalSearch(query), 220);
+    });
+    clear.addEventListener('click', () => {
+        input.value = '';
+        clear.hidden = true;
+        document.getElementById('searchResults').hidden = true;
+        input.focus();
+    });
+    document.addEventListener('click', event => {
+        if (!form.contains(event.target)) document.getElementById('searchResults')?.setAttribute('hidden', '');
+    }, { once: true });
+}
+
+async function loadGlobalSearch(query) {
+    const version = ++searchVersion;
+    const result = document.getElementById('searchResults');
+    if (!result) return;
+    result.hidden = false;
+    result.innerHTML = '<div class="search-message">Поиск...</div>';
+    try {
+        const data = await api('GET', `/api/search?q=${encodeURIComponent(query)}`);
+        if (version !== searchVersion || !result.isConnected) return;
+        const rows = [
+            ...(data.subjects || []).map(item => `<button class="search-result" type="button" onclick="navigate('tests/${encodeURIComponent(item.key)}')"><strong>${escapeHTML(item.name)}</strong><small>${item.question_count} вопросов</small></button>`),
+            ...(data.questions || []).map(item => `<button class="search-result" type="button" onclick="navigate('tests/${encodeURIComponent(item.subject)}')"><strong>${escapeHTML(item.subject_name)}</strong><span>${escapeHTML(item.snippet)}</span></button>`),
+        ];
+        result.innerHTML = rows.length ? rows.join('') : '<div class="search-message">Ничего не найдено</div>';
+    } catch (error) {
+        result.innerHTML = '<div class="search-message">Поиск временно недоступен</div>';
+    }
+}
+
+function formatAccuracy(value) {
+    return value == null ? '—' : `${Math.round(value)}%`;
+}
+
+function subjectMark(subject, index) {
+    return `<span class="subject-mark subject-mark-${index % 5}" aria-hidden="true">${escapeHTML((subject.name || subject.key || 'П').replace(/[^А-Яа-яA-Za-z]/g, '').slice(0, 1) || 'П')}</span>`;
+}
+
+async function renderDashboard() {
+    app.innerHTML = '<div class="loading">Загружаем вашу базу знаний...</div>';
+    const [dashboard, progress, rating] = await Promise.all([
+        api('GET', '/api/dashboard'), api('GET', '/api/progress'), api('GET', '/api/leaderboard'),
+    ]);
+    if (dashboard.error || progress.error) throw new Error('Dashboard data unavailable');
+    const accuracy = progress.summary.accuracy_percent;
+    const recent = dashboard.recent_exams || [];
+    const subjects = dashboard.subjects || [];
+    const picks = [...subjects].sort((a, b) => b.question_count - a.question_count).slice(0, 5);
+    const totalAnswered = progress.summary.answered || 0;
+    const recentHtml = recent.length ? recent.slice(0, 3).map(item => `
+        <a class="recent-row" href="#progress"><span class="recent-dot"></span><span><strong>${escapeHTML(item.subject)}</strong><small>${item.correct} из ${item.answered} правильных · ${escapeHTML(item.completed_at.slice(0, 10))}</small></span><span class="recent-score">${item.percentage ?? '—'}%</span></a>`).join('') : '<div class="empty-inline"><strong>История пока пустая</strong><span>Завершите первый экзамен, чтобы увидеть результат здесь.</span></div>';
+    const subjectHtml = picks.length ? picks.map((subject, index) => `
+        <a class="subject-card" href="#subject/${encodeURIComponent(subject.key)}">${subjectMark(subject, index)}<span class="subject-card-copy"><strong>${escapeHTML(subject.name)}</strong><small>${subject.question_count.toLocaleString('ru-RU')} вопросов</small></span><span class="subject-chevron" aria-hidden="true">›</span></a>`).join('') : '<div class="empty-inline">Вопросы пока не добавлены.</div>';
+    const rankText = rating.rank ? `Место ${rating.rank}` : rating.enabled ? 'Рейтинг обновится, когда появятся участники' : 'Включите участие на странице рейтинга';
+    const rail = `<aside class="workspace-rail">
+        <section class="rail-panel progress-panel"><div class="panel-heading"><h2>Точность ответов</h2><a href="#progress">Подробнее</a></div><div class="accuracy-ring" style="--accuracy:${accuracy || 0}%"><span>${formatAccuracy(accuracy)}</span></div><p>${accuracy == null ? 'Появится после первого экзамена' : `По ${progress.summary.exam_count} завершённым экзаменам`}</p><div class="rail-divider"></div><div class="rail-metric"><span>Ответов сегодня</span><strong>${dashboard.activity.answers_today}</strong></div><div class="rail-metric"><span>Серия занятий</span><strong>${dashboard.activity.streak_days} дн.</strong></div></section>
+        <section class="rail-panel ranking-panel"><div class="panel-heading"><h2>Мой рейтинг</h2><span class="trophy-mark" aria-hidden="true">★</span></div><strong class="rank-position">${escapeHTML(rankText)}</strong><p>${rating.enabled ? `${rating.entries?.find(item => item.rank === rating.rank)?.points ?? 0} баллов` : 'Псевдоним можно выбрать в настройках рейтинга'}</p><a class="text-link" href="#rating">Открыть рейтинг <span aria-hidden="true">→</span></a></section>
+        <section class="mascot-note"><img src="/static/assets/ameba-mascot.webp" alt="Амёба читает книгу" loading="lazy"><p>Шаг за шагом<br>к уверенности</p></section>
+    </aside>`;
+    const content = `
+        <section class="dashboard-hero">
+            <div class="hero-copy"><p class="eyebrow">ВАША БАЗА ЗНАНИЙ</p><h1>Подготовка<br>к экзаменам</h1><p>Учитесь в своём темпе. Отслеживайте прогресс и возвращайтесь к сложным вопросам.</p><div class="hero-actions"><button class="action-primary" type="button" onclick="navigate('tests')">Начать подготовку <span aria-hidden="true">→</span></button><button class="action-secondary" type="button" onclick="navigate('subjects')">Все предметы</button></div></div>
+            <img class="hero-mascot" src="/static/assets/ameba-mascot.webp" alt="Амёба изучает медицинские материалы">
+        </section>
+        <section class="metric-strip" aria-label="Статистика каталога">
+            <div class="metric-item"><span class="metric-icon metric-icon-green">✳</span><span><strong>${dashboard.catalog.question_count.toLocaleString('ru-RU')}</strong><small>вопросов</small></span></div>
+            <div class="metric-item"><span class="metric-icon metric-icon-teal">▦</span><span><strong>${dashboard.catalog.subject_count}</strong><small>предметов</small></span></div>
+            <div class="metric-item"><span class="metric-icon metric-icon-blue">✓</span><span><strong>${dashboard.access.subject_count}</strong><small>полный доступ</small></span></div>
+            <div class="metric-item"><span class="metric-icon metric-icon-amber">◷</span><span><strong>${totalAnswered.toLocaleString('ru-RU')}</strong><small>ответов в экзаменах</small></span></div>
+        </section>
+        <section class="dashboard-section"><div class="section-heading"><div><p class="eyebrow">КАТАЛОГ</p><h2>Предметы</h2></div><a class="text-link" href="#subjects">Все предметы <span aria-hidden="true">→</span></a></div><div class="subject-grid">${subjectHtml}</div></section>
+        <section class="dashboard-section tests-section"><div class="section-heading"><div><p class="eyebrow">ПРАКТИКА</p><h2>Продолжить обучение</h2></div><a class="text-link" href="#tests">Все тесты <span aria-hidden="true">→</span></a></div><div class="recommendation-list">${picks.slice(0, 3).map((subject, index) => `<article class="recommendation-row">${subjectMark(subject, index)}<span class="recommendation-copy"><strong>${escapeHTML(subject.name)}</strong><small>${subject.question_count} вопросов в каталоге · ${subject.access ? 'полный доступ' : 'доступны пробные вопросы'}</small></span><button class="small-action" type="button" onclick="navigate('tests/${encodeURIComponent(subject.key)}')">Открыть <span aria-hidden="true">→</span></button></article>`).join('') || '<div class="empty-inline">Тесты появятся, когда в каталоге будут вопросы.</div>'}</div></section>
+        <section class="dashboard-section recent-section"><div class="section-heading"><div><p class="eyebrow">ВАШИ ЗАНЯТИЯ</p><h2>Недавние экзамены</h2></div><a class="text-link" href="#progress">История <span aria-hidden="true">→</span></a></div><div class="recent-list">${recentHtml}</div></section>`;
+    renderShell('home', content, { rail });
+}
+
+async function renderSubjectCatalog() {
+    app.innerHTML = '<div class="loading">Загружаем предметы...</div>';
+    const data = await api('GET', '/api/dashboard');
+    if (data.error) throw new Error('Catalog unavailable');
+    const subjects = data.subjects || [];
+    const content = `<section class="page-intro"><p class="eyebrow">КАТАЛОГ</p><h1>Предметы</h1><p>${data.catalog.subject_count} предмета · ${data.catalog.question_count.toLocaleString('ru-RU')} вопросов</p></section><div class="catalog-subject-grid">${subjects.length ? subjects.map((subject, index) => `<a class="catalog-subject" href="#subject/${encodeURIComponent(subject.key)}">${subjectMark(subject, index)}<span><strong>${escapeHTML(subject.name)}</strong><small>${subject.question_count} вопросов · ${subject.access ? 'полный доступ' : 'пробный режим'}</small></span><span class="subject-chevron">›</span></a>`).join('') : '<div class="empty-state"><h2>Каталог пуст</h2><p>Когда вопросы появятся, они будут доступны здесь.</p></div>'}</div>`;
+    renderShell('subjects', content);
+}
+
+async function renderTests(filter = '') {
+    app.innerHTML = '<div class="loading">Загружаем тесты...</div>';
+    const [data, config] = await Promise.all([api('GET', '/api/dashboard'), loadConfig()]);
+    if (data.error) throw new Error('Test catalog unavailable');
+    const subjects = (data.subjects || []).filter(item => !filter || item.key === filter);
+    const content = `<section class="page-intro"><p class="eyebrow">ТРЕНИРОВКА</p><h1>${filter ? 'Тесты по предмету' : 'Тесты'}</h1><p>Выберите предмет и продолжайте подготовку по реальным вопросам каталога.</p></section><div class="test-catalog">${subjects.length ? subjects.map((subject, index) => `<article class="test-subject-row">${subjectMark(subject, index)}<div class="test-subject-copy"><strong>${escapeHTML(subject.name)}</strong><small>${subject.question_count.toLocaleString('ru-RU')} вопросов · ${subject.access ? 'полный доступ' : '5 пробных ответов'}</small></div><button class="small-action" type="button" onclick="navigate('test/${encodeURIComponent(subject.key)}')">Решать <span aria-hidden="true">→</span></button>${subject.access ? `<button class="icon-action" type="button" aria-label="Начать экзамен по ${escapeHTML(subject.name)}" title="Симуляция экзамена" onclick="navigate('exam-start/${encodeURIComponent(subject.key)}')">◷</button>` : ''}</article>`).join('') : '<div class="empty-state"><h2>Вопросов пока нет</h2><p>Для этого раздела еще нет доступного каталога.</p></div>'}</div>`;
+    renderShell('tests', content);
+}
+
+async function renderSubjectDetail(subjectKey) {
+    app.innerHTML = '<div class="loading">Открываем предмет...</div>';
+    const [config, dashboard] = await Promise.all([loadConfig(), api('GET', '/api/dashboard')]);
+    let subject = (dashboard.subjects || []).find(item => item.key === subjectKey);
+    if (!subject) return renderSubjectCatalog();
+    const access = !!config.access[subjectKey];
+    const remaining = Math.max(0, 5 - (config.trials[subjectKey] || 0));
+    const content = `<section class="page-intro"><a class="back-link" href="#subjects">← Предметы</a><p class="eyebrow">ПРЕДМЕТ</p><h1>${escapeHTML(subject.name)}</h1><p>${subject.question_count.toLocaleString('ru-RU')} вопросов в каталоге</p></section><section class="subject-detail-panel"><div class="detail-status"><span class="status-dot ${access ? 'status-dot-ready' : ''}"></span>${access ? 'Полный доступ' : `Пробный доступ: осталось ${remaining} вопросов`}</div><div class="detail-actions"><button class="action-primary" type="button" ${!access && remaining <= 0 ? 'disabled' : ''} onclick="navigate('test/${encodeURIComponent(subjectKey)}')">Начать тест <span aria-hidden="true">→</span></button>${access ? `<button class="action-secondary" type="button" onclick="navigate('exam-start/${encodeURIComponent(subjectKey)}')">Симуляция экзамена</button>` : `<button class="action-secondary" type="button" onclick="navigate('purchase/${encodeURIComponent(subjectKey)}')">Как получить доступ</button>`}</div></section>`;
+    renderShell('subjects', content);
+}
+
 async function route() {
     if (!WEB_SESSION) return renderLogin();
     const { path, params } = getRoute();
@@ -93,7 +271,18 @@ async function route() {
     try {
         switch (path) {
             case '':
-                await renderFaculties();
+            case 'home':
+                await renderDashboard();
+                break;
+            case 'tests':
+                await renderTests(params[0]);
+                break;
+            case 'subjects':
+                if (params.length) await renderSubjects(params[0], parseInt(params[1]));
+                else await renderSubjectCatalog();
+                break;
+            case 'subject':
+                await renderSubjectDetail(params[0]);
                 break;
             case 'courses':
                 await renderCourses(params[0]);
@@ -129,7 +318,7 @@ async function route() {
                 await renderReferral();
                 break;
             default:
-                navigate('');
+                await renderShell(path, '<section class="empty-state"><h2>Раздел обновляется</h2><p>Эта страница появится в ближайшем обновлении.</p></section>');
         }
     } catch (e) {
         console.error(e);
