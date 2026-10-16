@@ -5,6 +5,7 @@
 import sqlite3
 import os
 import shutil
+from gak_import import import_gak_surgery_questions
 
 DATA_DIR = "/data"
 DB_PATH = os.path.join(DATA_DIR, "questions.db")
@@ -51,6 +52,34 @@ cursor.execute("""
 CREATE INDEX IF NOT EXISTS idx_history_user_subject
 ON question_history (user_id, subject)
 """)
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS question_cycle_seen (
+    provider TEXT NOT NULL,
+    account_key TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    question_id INTEGER NOT NULL,
+    shown_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (provider, account_key, subject, question_id)
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS question_cycle_migrations (
+    provider TEXT PRIMARY KEY,
+    migrated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+""")
+if not cursor.execute(
+    "SELECT 1 FROM question_cycle_migrations WHERE provider='telegram'"
+).fetchone():
+    cursor.execute("""
+        INSERT OR IGNORE INTO question_cycle_seen(provider, account_key, subject, question_id)
+        SELECT 'telegram', CAST(user_id AS TEXT), LOWER(subject), question_id
+        FROM question_history
+        GROUP BY user_id, LOWER(subject), question_id
+    """)
+    cursor.execute("INSERT INTO question_cycle_migrations(provider) VALUES ('telegram')")
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS purchases (
@@ -159,3 +188,6 @@ CREATE TABLE IF NOT EXISTS sessions (
 conn.commit()
 conn.close()
 print(f"[init_db] БД готова: {DB_PATH}")
+
+imported = import_gak_surgery_questions(DB_PATH)
+print(f"[init_db] Вопросы ГАК по хирургии: добавлено {imported}")

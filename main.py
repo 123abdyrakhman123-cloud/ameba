@@ -10,7 +10,9 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiohttp import web
 import config
 import init_db  # создаёт таблицы при старте
+from gak_catalog import GAK_SECTIONS, GAK_SUBJECTS_BY_SECTION, GAK_SUBJECT_SECTION, GAK_SURGERY_SUBJECTS
 from webapp_server import create_app, _save_session, _load_session, _delete_session
+from question_cycles import mark_question_shown, next_practice_question, select_exam_questions
 
 WEBAPP_URL = "https://ameba-app.uk"
 
@@ -74,6 +76,10 @@ FACULTIES = {
                 {"key": "infections", "name": "🦠 Инфекционные болезни"},
                 {"key": "therapy5", "name": "🩻 Терапия 5"},
                 {"key": "pediatrics5", "name": "👶 Педиатрия 5"},
+            ],
+            6: [
+                {"key": subject["key"], "name": subject["name"]}
+                for subject in GAK_SURGERY_SUBJECTS
             ],
         }
     }
@@ -175,6 +181,30 @@ def get_questions_excluding(subject, exclude_ids, limit=1):
         filtered = all_questions
     return random.sample(filtered, min(limit, len(filtered)))
 
+def get_next_practice_question(user_id, subject):
+    conn = db_conn()
+    try:
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            return next_practice_question(conn, "telegram", user_id, subject)
+    finally:
+        conn.close()
+
+def get_exam_questions(user_id, subject, limit=50):
+    conn = db_conn()
+    try:
+        return select_exam_questions(conn, "telegram", user_id, subject, limit)
+    finally:
+        conn.close()
+
+def mark_bot_question_shown(user_id, subject, question_id):
+    conn = db_conn()
+    try:
+        with conn:
+            return mark_question_shown(conn, "telegram", user_id, subject, question_id)
+    finally:
+        conn.close()
+
 def question_to_inline(question, mode="exam"):
     # question[3:8] - это option1..option5
     options = [opt for opt in question[3:8] if opt and isinstance(opt, str)]
@@ -246,7 +276,31 @@ def subject_menu_inline(fac_key, course_num):
     buttons.append([InlineKeyboardButton(text=f"⬅️ Назад к курсам", callback_data=f"fac_{fac_key}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-def mode_inline(subject, fac_key, course_num, has_acc=False):
+def gak_course_inline():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎓 ГАК", callback_data="gak_lech_6")],
+        [InlineKeyboardButton(text="⬅️ Назад к курсам", callback_data="fac_lech")],
+    ])
+
+def gak_sections_inline():
+    buttons = []
+    for section in GAK_SECTIONS:
+        subjects = GAK_SUBJECTS_BY_SECTION[section["key"]]
+        label = section["name"] + (" (скоро)" if not subjects else "")
+        buttons.append([InlineKeyboardButton(text=label, callback_data=f"gaksec_{section['key']}")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад к курсу", callback_data="course_lech_6")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def gak_subject_menu_inline(section_key):
+    subjects = GAK_SUBJECTS_BY_SECTION.get(section_key, ())
+    buttons = [
+        [InlineKeyboardButton(text=subject["name"], callback_data=f"subj_lech_6_{subject['key']}")]
+        for subject in subjects
+    ]
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад к разделам ГАК", callback_data="gak_lech_6")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def mode_inline(subject, fac_key, course_num, has_acc=False, back_callback=None):
     """Меню выбора режима для предмета"""
     buttons = [
         [InlineKeyboardButton(text="📝 Симуляция экзамена", callback_data=f"mode_exam_{subject}")],
@@ -254,7 +308,10 @@ def mode_inline(subject, fac_key, course_num, has_acc=False):
     ]
     if not has_acc:
         buttons.append([InlineKeyboardButton(text="💳 Купить доступ", callback_data=f"buy_access_{subject}")])
-    buttons.append([InlineKeyboardButton(text=f"⬅️ Назад к предметам", callback_data=f"course_{fac_key}_{course_num}")])
+    buttons.append([InlineKeyboardButton(
+        text="⬅️ Назад к предметам",
+        callback_data=back_callback or f"course_{fac_key}_{course_num}",
+    )])
     buttons.append([InlineKeyboardButton(text="📩 Поддержка", callback_data="support")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -787,9 +844,43 @@ async def handle_course_click(callback: CallbackQuery):
         return
 
     fac_name = fac["name"]
+    if fac_key == "lech" and course_num == 6:
+        await callback.message.edit_text(
+            f"{fac_name} — {course_num} курс\n\n🎓 Выберите программу:",
+            reply_markup=gak_course_inline(),
+        )
+        await callback.answer()
+        return
+
     await callback.message.edit_text(
         f"{fac_name} — {course_num} курс\n\n📖 Выберите предмет:",
         reply_markup=subject_menu_inline(fac_key, course_num)
+    )
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("gak_lech_"))
+async def handle_gak_menu(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "Лечебное дело — 6 курс — ГАК\n\n📚 Выберите раздел:",
+        reply_markup=gak_sections_inline(),
+    )
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("gaksec_"))
+async def handle_gak_section(callback: CallbackQuery):
+    section_key = callback.data.split("_", 1)[1]
+    subjects = GAK_SUBJECTS_BY_SECTION.get(section_key)
+    if subjects is None:
+        await callback.answer("Раздел не найден.")
+        return
+    if not subjects:
+        await callback.answer("Материалы этого раздела скоро появятся.", show_alert=True)
+        return
+
+    section_name = next(section["name"] for section in GAK_SECTIONS if section["key"] == section_key)
+    await callback.message.edit_text(
+        f"ГАК — {section_name}\n\n📖 Выберите предмет:",
+        reply_markup=gak_subject_menu_inline(section_key),
     )
     await callback.answer()
 
@@ -839,7 +930,11 @@ async def back_to_menu(callback: CallbackQuery):
 async def show_subject_modes(callback_or_message, subject, fac_key, course_num):
     user_id = callback_or_message.from_user.id if isinstance(callback_or_message, CallbackQuery) else callback_or_message.from_user.id
     has_acc = has_access(user_id, subject)
-    markup = mode_inline(subject, fac_key, course_num, has_acc=has_acc)
+    section_key = GAK_SUBJECT_SECTION.get(subject)
+    back_callback = f"gaksec_{section_key}" if section_key else None
+    markup = mode_inline(
+        subject, fac_key, course_num, has_acc=has_acc, back_callback=back_callback
+    )
 
     # Найдём красивое название предмета
     subj_name = subject.capitalize()
@@ -1542,7 +1637,7 @@ async def confirm_exam_start(callback: CallbackQuery):
     user_id = callback.from_user.id
     print(f"[confirm_exam_start] subject={subject}, user_id={user_id}")
 
-    questions = get_questions(subject, 50)
+    questions = get_exam_questions(user_id, subject, 50)
     print(f"[confirm_exam_start] questions count: {len(questions)}")
 
     if not questions:
@@ -1563,9 +1658,6 @@ async def confirm_exam_start(callback: CallbackQuery):
 
     # Логируем запуск экзамена
     log_exam_start(user_id, subject)
-
-    # Сохраняем все вопросы экзамена в историю
-    save_questions_to_history(user_id, subject, [q[0] for q in questions])
 
     _save_session(user_id, 'exam', {
         "subject": subject,
@@ -1606,6 +1698,7 @@ async def send_exam_question(message, user_id):
     time_str = format_time_remaining(minutes, seconds)
     question_text = f"{time_str}\n\n{format_question_text(q, session['current'] + 1, len(session['questions']))}"
     await message.answer(question_text, reply_markup=markup)
+    mark_bot_question_shown(user_id, session["subject"], q[0])
 
 async def finish_exam(message, user_id, time_expired=False):
     session = _load_session(user_id, 'exam')
@@ -1689,17 +1782,11 @@ async def confirm_tests_start(callback: CallbackQuery):
     subject = callback.data.split("_", 2)[2]
     user_id = callback.from_user.id
 
-    # Получаем последние 100 показанных вопросов для исключения повторов
-    recent_ids = set(get_recent_question_ids(user_id, subject, 100))
-    questions = get_questions_excluding(subject, recent_ids, 1)
-    if not questions:
+    q = get_next_practice_question(user_id, subject)
+    if q is None:
         await callback.message.answer("❌ В базе нет вопросов.")
         await callback.answer()
         return
-
-    q = questions[0]
-    # Сохраняем вопрос в историю
-    save_question_to_history(user_id, subject, q[0])
 
     _save_session(user_id, 'test', {"subject": subject, "question": list(q), "active": True})
     markup = question_to_inline(q, mode="test")
@@ -2443,22 +2530,20 @@ async def handle_test_answer(callback: CallbackQuery):
             return
 
     # ---------- новый вопрос ----------
-    recent_ids = set(get_recent_question_ids(user_id, subject, 100))
-    new_q = get_questions_excluding(subject, recent_ids, 1)
-    if not new_q:
+    new_question = get_next_practice_question(user_id, subject)
+    if new_question is None:
         await callback.message.answer("✔️ Вопросы закончились.")
         session["active"] = False
         _save_session(user_id, 'test', session)
         return
 
-    save_question_to_history(user_id, subject, new_q[0][0])
-
-    session["question"] = list(new_q[0])
+    session["question"] = list(new_question)
     _save_session(user_id, 'test', session)
-    markup = question_to_inline(new_q[0], mode="test")
+    markup = question_to_inline(new_question, mode="test")
 
-    question_text = f"━━━━━━━━━━━━━━━━\n▶️ Следующий вопрос:\n━━━━━━━━━━━━━━━━\n\n{format_question_text(new_q[0])}"
+    question_text = f"━━━━━━━━━━━━━━━━\n▶️ Следующий вопрос:\n━━━━━━━━━━━━━━━━\n\n{format_question_text(new_question)}"
     await callback.message.answer(question_text, reply_markup=markup)
+    mark_bot_question_shown(user_id, subject, new_question[0])
 
     await callback.answer()
 # ---------------- ЗАПУСК ---------------
