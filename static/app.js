@@ -149,7 +149,8 @@ async function renderCourses(facKey) {
 
     let html = `<div class="header"><h1>${fac.name}</h1><p>Выберите курс</p></div>`;
     html += '<div class="btn-list">';
-    for (let i = 1; i <= fac.courses; i++) {
+    const courseNumbers = fac.course_numbers || Array.from({ length: fac.courses }, (_, i) => i + 1);
+    for (const i of courseNumbers) {
         const subjects = fac.subjects[String(i)] || [];
         const hasSub = subjects.length > 0;
         const hint = hasSub ? '' : '<div class="btn-hint">Скоро</div>';

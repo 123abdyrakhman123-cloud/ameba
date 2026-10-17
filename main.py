@@ -82,7 +82,16 @@ FACULTIES = {
                 for subject in GAK_SURGERY_SUBJECTS
             ],
         }
-    }
+    },
+    "pediatrics": {
+        "name": "👶 Педиатрия",
+        "courses": 5,
+        "course_numbers": (3, 5),
+        "subjects": {
+            3: [{"key": "pediatrics3", "name": "👶 Педиатрия"}],
+            5: [{"key": "pediatrics5", "name": "👶 Педиатрия 5"}],
+        },
+    },
 }
 
 # --- Все ключи предметов для валидации ---
@@ -256,7 +265,7 @@ def course_menu_inline(fac_key):
     """Меню выбора курса для факультета"""
     fac = FACULTIES[fac_key]
     buttons = []
-    for course_num in range(1, fac["courses"] + 1):
+    for course_num in fac.get("course_numbers", range(1, fac["courses"] + 1)):
         # Показываем есть ли предметы на курсе
         has_subjects = course_num in fac["subjects"] and len(fac["subjects"][course_num]) > 0
         label = f"📚 {course_num} курс"

@@ -276,6 +276,7 @@ async def handle_config(request):
         fac_serializable[fk] = {
             "name": fv["name"],
             "courses": fv["courses"],
+            "course_numbers": fv.get("course_numbers", list(range(1, fv["courses"] + 1))),
             "subjects": subj_ser,
         }
 
