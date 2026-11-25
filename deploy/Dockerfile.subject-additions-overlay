@@ -1,0 +1,9 @@
+FROM registry.fly.io/ameba-web-prod:question-progress-20261123
+
+WORKDIR /app
+
+COPY faculty_catalog.py ./faculty_catalog.py
+COPY import_questions.py webapp_subject_additions.py ./
+COPY web_question_data/subject_additions/ ./web_question_data/subject_additions/
+
+CMD ["sh", "-c", "python /app/webapp_subject_additions.py --db \"$AMEBA_WEB_DB_PATH\" && exec python -u /app/web_main.py"]
