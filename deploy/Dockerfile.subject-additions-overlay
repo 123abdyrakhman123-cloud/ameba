@@ -1,4 +1,4 @@
-FROM registry.fly.io/ameba-web-prod:question-progress-20261123
+FROM registry.fly.io/ameba-web-prod:subjects-20261125
 
 WORKDIR /app
 

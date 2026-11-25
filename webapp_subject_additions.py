@@ -4,6 +4,7 @@ import argparse
 from collections import Counter
 import os
 from pathlib import Path
+import re
 import sqlite3
 
 from import_questions import parse_file
@@ -18,6 +19,68 @@ BANKS = (
     ("mpd_epidemiology", "epidemiology.txt", 494),
     ("pharm_analytical_chemistry", "analytical_chemistry.txt", 419),
 )
+
+
+def _normalized_text(value: str | None) -> str:
+    return re.sub(r"[^0-9a-zа-яё]+", "", (value or "").casefold())
+
+
+def _repair_existing_bank_rows(conn, subject: str, expected_rows: list[tuple]) -> int | None:
+    """Safely repair rows whose final option absorbed an unmarked explanation."""
+    existing = conn.execute(
+        """SELECT id, question, option1, option2, option3, option4, option5,
+                  correct_option, explanation
+           FROM questions WHERE LOWER(subject)=LOWER(?)""",
+        (subject,),
+    ).fetchall()
+
+    def existing_key(row):
+        return (*row[1:6], row[7])
+
+    def expected_key(row):
+        return (*row[:5], row[6])
+
+    expected_by_key = {}
+    existing_by_key = {}
+    for row in expected_rows:
+        expected_by_key.setdefault(expected_key(row), []).append((row[5], row[7]))
+    for row in existing:
+        existing_by_key.setdefault(existing_key(row), []).append(row)
+
+    if Counter({key: len(rows) for key, rows in expected_by_key.items()}) != Counter(
+        {key: len(rows) for key, rows in existing_by_key.items()}
+    ):
+        return None
+
+    updates = []
+    for key, expected_values in expected_by_key.items():
+        remaining = list(expected_values)
+        for row in existing_by_key[key]:
+            _, _, _, _, _, _, old_option5, _, old_explanation = row
+            matches = []
+            for value in set(remaining):
+                expected_option5, expected_explanation = value
+                if old_option5 == expected_option5 and old_explanation == expected_explanation:
+                    matches.append(value)
+                elif old_explanation in (None, "") and expected_explanation:
+                    if old_option5 == expected_option5 or _normalized_text(old_option5) == _normalized_text(
+                        f"{expected_option5} {expected_explanation}"
+                    ):
+                        matches.append(value)
+            if len(matches) != 1:
+                return None
+            expected_option5, expected_explanation = matches[0]
+            remaining.remove(matches[0])
+            if old_option5 != expected_option5 or old_explanation != expected_explanation:
+                updates.append((expected_option5, expected_explanation, row[0]))
+        if remaining:
+            return None
+
+    conn.executemany(
+        "UPDATE questions SET option5=?, explanation=? WHERE id=?",
+        updates,
+    )
+    return len(updates)
 
 
 def migrate_subject_additions(db_path: str) -> dict[str, int]:
@@ -70,7 +133,9 @@ def migrate_subject_additions(db_path: str) -> dict[str, int]:
                     (subject,),
                 ).fetchall()
                 if Counter(existing_rows) != Counter(expected_rows):
-                    raise ValueError(f"Bank {subject} exists with content different from this release")
+                    repaired = _repair_existing_bank_rows(conn, subject, expected_rows)
+                    if repaired is None:
+                        raise ValueError(f"Bank {subject} exists with content different from this release")
                 inserted_by_bank[subject] = 0
                 continue
             if present:
