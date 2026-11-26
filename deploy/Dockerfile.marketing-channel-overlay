@@ -1,0 +1,6 @@
+FROM registry.fly.io/ameba-web-prod:epi-explanations-20261125
+
+WORKDIR /app
+
+COPY deploy/patch_marketing_channel_overlay.py /tmp/patch_marketing_channel_overlay.py
+RUN python /tmp/patch_marketing_channel_overlay.py && rm /tmp/patch_marketing_channel_overlay.py
